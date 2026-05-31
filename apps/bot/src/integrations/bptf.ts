@@ -237,7 +237,11 @@ export async function createListing(params: CreateListingParams): Promise<{ bptf
   const item: Record<string, unknown> = {
     defindex: params.defindex,
     quality: params.quality,
-    craftable: params.craftable ? 1 : 0,
+    craftable: params.craftable,
+    killstreak: 0,
+    australium: false,
+    festivized: false,
+    flag_cannot_craft: !params.craftable,
   };
 
   const listingPayload: Record<string, unknown> = {

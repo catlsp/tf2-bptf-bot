@@ -1,5 +1,5 @@
 import { Bot } from 'grammy';
-import pino from 'pino';
+import { pino } from 'pino';
 import { registerCommands, allowedChat } from './commands.js';
 import { startNotifications } from './notifications.js';
 

@@ -1,6 +1,6 @@
 import type { Bot, Context } from 'grammy';
 import type { Logger } from 'pino';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { prisma } from '@bptf/db';
 
 // Command handlers for /start, /balance, /stats, /stop, /resume. Keys here MUST

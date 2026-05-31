@@ -1,6 +1,6 @@
 import type { Bot } from 'grammy';
 import type { Logger } from 'pino';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { BOT_EVENTS_CHANNEL, type BotEvent } from '@bptf/types';
 
 // Subscribes to the bot's Redis event channel and forwards a formatted message

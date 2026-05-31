@@ -197,3 +197,143 @@ export async function fetchAutoprice(params: {
   }
   return { skuKey: params.skuKey, buyRef: null, sellRef: null };
 }
+
+// ============================================================================
+// PHASE 2: Listing creation / management
+// These hit the classifieds endpoints with the USER TOKEN (not the API key) and
+// flow through the same rate limiter as everything else.
+// ============================================================================
+
+interface CreateListingParams {
+  intent: 'buy' | 'sell';
+  defindex: number;
+  quality: number;
+  craftable: boolean;
+  priceKeys: number;
+  priceMetal: number;
+  details: string;
+  assetId?: string; // sell only — required for sell, MUST be undefined for buy
+}
+
+interface BptfCreateListingResponse {
+  listings?: Record<string, { created?: number; error?: string }>;
+  cap?: number;
+  promotes_remaining?: number;
+}
+
+/**
+ * POST bp.tf classifieds — create a new listing.
+ * BUY: assetId omitted, item sent. SELL: assetId required (Phase 4+).
+ * Endpoint: POST /classifieds/list/v1 (auth = user token).
+ */
+export async function createListing(params: CreateListingParams): Promise<{ bptfListingId: string }> {
+  if (params.intent === 'sell' && !params.assetId) {
+    throw new Error('createListing: sell listings require assetId');
+  }
+  if (params.intent === 'buy' && params.assetId) {
+    throw new Error('createListing: buy listings must not have assetId');
+  }
+
+  const item: Record<string, unknown> = {
+    defindex: params.defindex,
+    quality: params.quality,
+    craftable: params.craftable ? 1 : 0,
+  };
+
+  const listingPayload: Record<string, unknown> = {
+    intent: params.intent === 'buy' ? 0 : 1, // bp.tf: 0=buy, 1=sell
+    currencies: { keys: params.priceKeys, metal: params.priceMetal },
+    details: params.details,
+  };
+
+  if (params.intent === 'buy') listingPayload.item = item;
+  else listingPayload.id = params.assetId;
+
+  return limiter.schedule(async () => {
+    const resp = await http.post('/classifieds/list/v1', {
+      token: env.BPTF_USER_TOKEN,
+      listings: [listingPayload],
+    });
+
+    if (resp.status !== 200) {
+      throw new BptfApiError(
+        `bp.tf createListing returned ${resp.status}: ${JSON.stringify(resp.data)}`,
+        resp.status,
+        '/classifieds/list/v1',
+      );
+    }
+
+    const data = resp.data as BptfCreateListingResponse;
+    const firstKey = Object.keys(data.listings ?? {})[0];
+    const entry = firstKey ? data.listings?.[firstKey] : undefined;
+
+    if (!entry || entry.error) {
+      throw new BptfApiError(`bp.tf createListing failed: ${entry?.error ?? 'no response entry'}`, 200, '/classifieds/list/v1');
+    }
+    if (!entry.created || entry.created === 0) {
+      throw new BptfApiError(`bp.tf createListing did not create (response: ${JSON.stringify(entry)})`, 200, '/classifieds/list/v1');
+    }
+
+    // bp.tf returns the numeric listing id in `created`; we treat ids as strings.
+    return { bptfListingId: String(entry.created) };
+  });
+}
+
+/** DELETE a listing by bp.tf id. Endpoint: DELETE /classifieds/delete/v1. */
+export async function deleteListing(bptfListingId: string): Promise<void> {
+  return limiter.schedule(async () => {
+    const resp = await http.delete('/classifieds/delete/v1', {
+      data: { token: env.BPTF_USER_TOKEN, listing_ids: [bptfListingId] },
+    });
+    if (resp.status !== 200) {
+      throw new BptfApiError(`bp.tf deleteListing returned ${resp.status}`, resp.status, '/classifieds/delete/v1');
+    }
+  });
+}
+
+interface BptfMyListingsResponse {
+  listings?: Array<{
+    id: string;
+    intent: number;
+    item?: { defindex: number; quality: number; flag_cannot_craft?: boolean };
+    currencies: { keys?: number; metal?: number };
+    details?: string;
+    bump?: number;
+    created?: number;
+  }>;
+  cap?: number;
+}
+
+export interface MyListing {
+  bptfListingId: string;
+  intent: 'buy' | 'sell';
+  defindex: number;
+  quality: number;
+  craftable: boolean;
+  priceKeys: number;
+  priceMetal: number;
+  bumpedAt?: number;
+  createdAt?: number;
+}
+
+/** GET our active listings on bp.tf, to reconcile DB state. Endpoint: GET /classifieds/listings/v1. */
+export async function listMyListings(): Promise<MyListing[]> {
+  return limiter.schedule(async () => {
+    const resp = await http.get('/classifieds/listings/v1', { params: { token: env.BPTF_USER_TOKEN } });
+    if (resp.status !== 200) {
+      throw new BptfApiError(`bp.tf listMyListings returned ${resp.status}`, resp.status, '/classifieds/listings/v1');
+    }
+    const data = resp.data as BptfMyListingsResponse;
+    return (data.listings ?? []).map((l) => ({
+      bptfListingId: l.id,
+      intent: l.intent === 0 ? ('buy' as const) : ('sell' as const),
+      defindex: l.item?.defindex ?? 0,
+      quality: l.item?.quality ?? 6,
+      craftable: !l.item?.flag_cannot_craft,
+      priceKeys: l.currencies?.keys ?? 0,
+      priceMetal: l.currencies?.metal ?? 0,
+      bumpedAt: l.bump,
+      createdAt: l.created,
+    }));
+  });
+}

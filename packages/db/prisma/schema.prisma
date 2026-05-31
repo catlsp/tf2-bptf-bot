@@ -8,6 +8,27 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Phase 2: our own BUY listings on bp.tf (maker side).
+model OurListing {
+  id            String    @id @default(uuid())
+  bptfListingId String?   @unique
+  skuKey        String
+  intent        String // 'buy' for Phase 2
+  priceRef      Decimal   @db.Decimal(10, 2)
+  priceKeys     Int       @default(0)
+  priceMetal    Decimal   @db.Decimal(10, 2)
+  fairValueRef  Decimal   @db.Decimal(10, 2)
+  details       String?
+  status        String // 'creating' | 'active' | 'deleting' | 'deleted' | 'failed'
+  errorMessage  String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz()
+  refreshedAt   DateTime  @default(now()) @db.Timestamptz()
+  deletedAt     DateTime? @db.Timestamptz()
+
+  @@index([skuKey, intent, status])
+  @@index([status, refreshedAt])
+}
+
 model Item {
   id         String   @id @default(cuid())
   defindex   Int

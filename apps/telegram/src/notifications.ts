@@ -31,6 +31,16 @@ function format(e: BotEvent): string | null {
       return e.active ? `🔴 EMERGENCY STOP: ${e.reason}` : `🟢 Emergency stop cleared: ${e.reason}`;
     case 'error':
       return `⚠️ *${e.scope}* error: ${e.message}`;
+    case 'listing.created': {
+      const p = e.payload as { skuKey?: string; priceRef?: number };
+      return `🏷️ Listing BUY ${p.skuKey} @ ${p.priceRef} ref`;
+    }
+    case 'listing.refresh.summary': {
+      const p = e.payload as { created?: number; deleted?: number; skipped?: number; errors?: number; totalActive?: number };
+      return `📋 Listings refresh: +${p.created} -${p.deleted} ~${p.skipped} err=${p.errors} active=${p.totalActive}`;
+    }
+    case 'listing.deleted':
+      return null;
     default:
       return null;
   }

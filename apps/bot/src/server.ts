@@ -9,7 +9,7 @@ import { ensureSeeded } from './watchlist/manager.js';
 import { registerOfferHandler } from './trading/offerHandler.js';
 import { startScanner, stopScanner } from './jobs/scanner.js';
 import { startInventorySync, publishBalanceSummary } from './jobs/inventorySync.js';
-import { startListingRefresh } from './jobs/listingRefresh.js';
+import { startListingRefresh, stopListingRefresh } from './jobs/listingRefresh.js';
 import { initOrderBook, loadWatchList } from './orderbook/orderBook.js';
 import { startWatchListScheduler, stopWatchListScheduler } from './watchlist/refreshWatchList.js';
 import * as bptfWs from './ws/bptfWs.js';
@@ -69,6 +69,7 @@ async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'shutting down');
   bptfWs.stop();
   stopWatchListScheduler();
+  stopListingRefresh();
   stopScanner();
   await disconnectRedis();
   process.exit(0);

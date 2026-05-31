@@ -42,9 +42,16 @@ export interface EmergencyStopEvent extends BaseEvent {
   reason: string;
 }
 
+// Phase 2 maker events.
+export interface ListingEvent extends BaseEvent {
+  type: 'listing.created' | 'listing.deleted' | 'listing.refresh.summary';
+  payload: Record<string, unknown>;
+}
+
 export type BotEvent =
   | ScanCompletedEvent
   | PaperTradeEvent
   | BalanceEvent
   | ErrorEvent
-  | EmergencyStopEvent;
+  | EmergencyStopEvent
+  | ListingEvent;

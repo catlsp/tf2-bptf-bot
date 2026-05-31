@@ -61,6 +61,16 @@ const schema = z.object({
   WATCHLIST_SEED_SIZE: numFromStr(20, 1),
 
   BPTF_MAX_REQ_PER_MIN: numFromStr(60, 1, 60),
+
+  // === Phase 2 — Maker (listings) controls ===
+  PAPER_LISTINGS: boolish(true), // MUST stay true until flipped. Mirrors PAPER_TRADING semantics.
+  LISTING_REFRESH_INTERVAL_SEC: numFromStr(1800, 10),
+  MAX_LISTINGS: numFromStr(30, 1),
+  LISTING_PRICE_DRIFT_PCT: numFromStr(2, 0),
+  LISTING_DETAILS_TEMPLATE: z
+    .string()
+    .default('Bot offering {priceRef} ref. Send a trade offer with this exact item, the offer will be reviewed.'),
+  BPTF_LISTING_DELAY_MS: numFromStr(1100, 0),
 });
 
 export type Env = z.infer<typeof schema>;

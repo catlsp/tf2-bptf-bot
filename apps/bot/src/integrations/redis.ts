@@ -1,6 +1,9 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { env } from '../config/index.js';
 import { logger } from '../lib/logger.js';
+
+// Named import (not default) so the class resolves as both a value and a type
+// under moduleResolution: nodenext — the default import is a namespace there.
 
 // Local redis on VPS #2, shared with tf2vault-bot for coordination + pub/sub.
 // One connection for commands; pub/sub gets its own (ioredis requirement).

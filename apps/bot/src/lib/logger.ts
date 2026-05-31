@@ -1,4 +1,4 @@
-import pino from 'pino';
+import { pino } from 'pino';
 
 // JSON in prod (cheap, parseable on the VPS), pretty in dev.
 const isDev = process.env.NODE_ENV !== 'production';

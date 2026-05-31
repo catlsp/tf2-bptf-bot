@@ -226,7 +226,9 @@ interface BptfCreateListingResponse {
  * BUY: assetId omitted, item sent. SELL: assetId required (Phase 4+).
  * Endpoint: POST /classifieds/list/v1 (auth = user token).
  */
-export async function createListing(params: CreateListingParams): Promise<{ bptfListingId: string }> {
+export async function createListing(
+  params: CreateListingParams,
+): Promise<{ bptfListingId: string | null; queued: boolean }> {
   if (params.intent === 'sell' && !params.assetId) {
     throw new Error('createListing: sell listings require assetId');
   }
@@ -271,15 +273,16 @@ export async function createListing(params: CreateListingParams): Promise<{ bptf
     const firstKey = Object.keys(data.listings ?? {})[0];
     const entry = firstKey ? data.listings?.[firstKey] : undefined;
 
-    if (!entry || entry.error) {
-      throw new BptfApiError(`bp.tf createListing failed: ${entry?.error ?? 'no response entry'}`, 200, '/classifieds/list/v1');
+    if (!entry) {
+      throw new BptfApiError('bp.tf createListing: no response entry', 200, '/classifieds/list/v1');
     }
-    if (!entry.created || entry.created === 0) {
-      throw new BptfApiError(`bp.tf createListing did not create (response: ${JSON.stringify(entry)})`, 200, '/classifieds/list/v1');
+    if (entry.error) {
+      throw new BptfApiError(`bp.tf createListing failed: ${entry.error}`, 200, '/classifieds/list/v1');
     }
-
-    // bp.tf returns the numeric listing id in `created`; we treat ids as strings.
-    return { bptfListingId: String(entry.created) };
+    // bp.tf classifieds/list/v1 is async since 2024+: response.created is a queue counter,
+    // NOT the real listing id. The real id arrives ~30-60s later and must be fetched via
+    // GET /classifieds/listings/v1. See jobs/listingReconcile.ts.
+    return { bptfListingId: null, queued: true };
   });
 }
 
@@ -339,5 +342,40 @@ export async function listMyListings(): Promise<MyListing[]> {
       bumpedAt: l.bump,
       createdAt: l.created,
     }));
+  });
+}
+
+/**
+ * GET bp.tf my listings, shaped for the listingReconcile matcher. Resolves the
+ * real listing id after async (queued) creation.
+ */
+export async function getMyListings(): Promise<
+  Array<{
+    id: string;
+    intent: number;
+    defindex: number;
+    quality: number;
+    craftable: boolean;
+    keys: number;
+    metal: number;
+  }>
+> {
+  return limiter.schedule(async () => {
+    const resp = await http.get('/classifieds/listings/v1', { params: { token: env.BPTF_USER_TOKEN } });
+    if (resp.status !== 200) {
+      throw new BptfApiError(`bp.tf getMyListings returned ${resp.status}`, resp.status, '/classifieds/listings/v1');
+    }
+    const data = resp.data as BptfMyListingsResponse;
+    return (data.listings ?? [])
+      .filter((l) => l.item?.defindex !== undefined)
+      .map((l) => ({
+        id: l.id,
+        intent: l.intent,
+        defindex: l.item!.defindex,
+        quality: l.item!.quality,
+        craftable: l.item!.flag_cannot_craft !== true,
+        keys: l.currencies.keys ?? 0,
+        metal: l.currencies.metal ?? 0,
+      }));
   });
 }

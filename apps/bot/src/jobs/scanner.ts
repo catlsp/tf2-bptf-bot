@@ -44,7 +44,7 @@ async function scanOnce(): Promise<void> {
 
     await refreshKeyPrice();
     const watchlist = await getActiveWatchlist();
-    logger.info({ skus: watchlist.length }, 'scan started');
+    logger.debug({ skus: watchlist.length }, 'scan started');
 
     for (const sku of watchlist) {
       try {
@@ -71,7 +71,7 @@ async function scanOnce(): Promise<void> {
     stats.lastOpportunities = opportunities;
     stats.totalOpportunities += opportunities;
 
-    logger.info({ skus: watchlist.length, opportunities, durationMs }, 'scan complete');
+    logger.debug({ skus: watchlist.length, opportunities, durationMs }, 'scan complete');
     await logEvent({ type: 'scan.completed', level: 'info', message: 'market scan complete', payload: { skus: watchlist.length, opportunities, durationMs } });
     await publish({ type: 'scan.completed', level: 'info', at: nowIso(), skusScanned: watchlist.length, opportunities, durationMs });
   } catch (e) {

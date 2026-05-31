@@ -10,6 +10,7 @@ import { registerOfferHandler } from './trading/offerHandler.js';
 import { startScanner, stopScanner } from './jobs/scanner.js';
 import { startInventorySync, publishBalanceSummary } from './jobs/inventorySync.js';
 import { startListingRefresh, stopListingRefresh } from './jobs/listingRefresh.js';
+import { startListingReconcile, stopListingReconcile } from './jobs/listingReconcile.js';
 import { initOrderBook, loadWatchList } from './orderbook/orderBook.js';
 import { startWatchListScheduler, stopWatchListScheduler } from './watchlist/refreshWatchList.js';
 import * as bptfWs from './ws/bptfWs.js';
@@ -53,6 +54,7 @@ async function main(): Promise<void> {
   registerOfferHandler();
   startInventorySync();
   startListingRefresh();
+  startListingReconcile(); // resolve real ids for async (queued) listings
   startScanner();
 
   // 6h balance summary to Telegram
@@ -70,6 +72,7 @@ async function shutdown(signal: string): Promise<void> {
   bptfWs.stop();
   stopWatchListScheduler();
   stopListingRefresh();
+  stopListingReconcile();
   stopScanner();
   await disconnectRedis();
   process.exit(0);

@@ -71,7 +71,7 @@ beforeEach(() => {
   h.redis.smembers.mockResolvedValue([]);
   h.getSkuName.mockResolvedValue('Some Item');
   h.fetchAutoprice.mockResolvedValue({ skuKey: 'x', buyRef: 10, sellRef: 12 });
-  h.createListing.mockResolvedValue({ bptfListingId: '111' });
+  h.createListing.mockResolvedValue({ bptfListingId: null, queued: true });
   h.deleteListing.mockResolvedValue(undefined);
   h.getOrderBook.mockResolvedValue({ buys: [], sells: [] });
 });
@@ -90,15 +90,15 @@ describe('listingRefresh — Phase 2 BUY maker', () => {
     expect(h.createListing).not.toHaveBeenCalled();
   });
 
-  it('3. three SKUs, none existing → 3 createListing + 3 active updates', async () => {
+  it('3. three SKUs, none existing → 3 createListing + 3 pending updates (async)', async () => {
     h.redis.smembers.mockResolvedValue(['30;6', '35;6', '40;6']);
     await runOnce();
     expect(h.createListing).toHaveBeenCalledTimes(3);
     expect(h.prisma.ourListing.create).toHaveBeenCalledTimes(3);
-    const activeUpdates = h.prisma.ourListing.update.mock.calls.filter(
-      (c) => (c[0] as { data?: { status?: string } }).data?.status === 'active',
+    const pendingUpdates = h.prisma.ourListing.update.mock.calls.filter(
+      (c) => (c[0] as { data?: { status?: string } }).data?.status === 'pending',
     );
-    expect(activeUpdates).toHaveLength(3);
+    expect(pendingUpdates).toHaveLength(3);
   });
 
   it('4. existing at same price → skipped, no API calls', async () => {

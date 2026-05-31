@@ -120,8 +120,12 @@ export async function runOnce(): Promise<void> {
       return;
     }
 
-    // 5. Ensure an active BUY listing per SKU at the right price
-    const currentBuyListings = await prisma.ourListing.findMany({ where: { intent: 'buy', status: 'active' } });
+    // 5. Ensure an active BUY listing per SKU at the right price.
+    // Include 'pending' so a queued (not-yet-resolved) listing isn't recreated as a
+    // duplicate on the next tick before listingReconcile flips it to 'active'.
+    const currentBuyListings = await prisma.ourListing.findMany({
+      where: { intent: 'buy', status: { in: ['active', 'pending'] } },
+    });
     const bySkuKey = new Map(currentBuyListings.map((l) => [l.skuKey, l]));
 
     let totalActive = currentBuyListings.length;
@@ -197,7 +201,7 @@ export async function runOnce(): Promise<void> {
       });
 
       try {
-        const { bptfListingId } = await createListing({
+        const result = await createListing({
           intent: 'buy',
           defindex: meta.defindex,
           quality: meta.quality,
@@ -207,9 +211,10 @@ export async function runOnce(): Promise<void> {
           details,
         });
 
+        // bp.tf is async — listing is queued; real id is resolved later by listingReconcile.
         await prisma.ourListing.update({
           where: { id: dbRow.id },
-          data: { bptfListingId, status: 'active', refreshedAt: new Date() },
+          data: { bptfListingId: result.bptfListingId, status: 'pending', refreshedAt: new Date() },
         });
 
         totalActive++;
@@ -218,8 +223,8 @@ export async function runOnce(): Promise<void> {
         await logEvent({
           type: 'listing.created',
           level: 'info',
-          message: `BUY listing ${skuKey} @ ${desiredPriceRef} ref (${keys}k + ${metal}r)`,
-          payload: { bptfListingId, skuKey, priceRef: desiredPriceRef, keys, metal },
+          message: `BUY listing ${skuKey} @ ${desiredPriceRef} ref (${keys}k + ${metal}r) [queued]`,
+          payload: { bptfListingId: result.bptfListingId, queued: result.queued, skuKey, priceRef: desiredPriceRef, keys, metal },
         });
         await publish({
           type: 'listing.created',

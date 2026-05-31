@@ -200,12 +200,15 @@ export async function runOnce(): Promise<void> {
         },
       });
 
+      const itemName = await getSkuName(skuKey);
+
       try {
         const result = await createListing({
           intent: 'buy',
           defindex: meta.defindex,
           quality: meta.quality,
           craftable: meta.craftable,
+          itemName,
           priceKeys: keys,
           priceMetal: metal,
           details,

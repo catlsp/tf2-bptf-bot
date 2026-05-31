@@ -237,6 +237,7 @@ interface CreateListingParams {
   defindex: number;
   quality: number;
   craftable: boolean;
+  itemName: string | null; // bp.tf needs item_name to resolve the item in its schema
   priceKeys: number;
   priceMetal: number;
   details: string;
@@ -276,9 +277,14 @@ export async function createListing(params: CreateListingParams): Promise<Create
     logger.warn({ defindex: params.defindex, quality: params.quality }, 'createListing skipped: missing quality');
     return { skipped: true, reason: 'missing_quality' };
   }
+  if (!params.itemName || params.itemName.trim() === '') {
+    logger.warn({ defindex: params.defindex, quality: params.quality }, 'createListing skipped: missing item name');
+    return { skipped: true, reason: 'missing_name' };
+  }
 
   const item: Record<string, unknown> = {
     defindex: params.defindex,
+    item_name: params.itemName, // required for bp.tf schema resolution (icon + title)
     quality: params.quality,
     craftable: params.craftable,
     killstreak: 0,

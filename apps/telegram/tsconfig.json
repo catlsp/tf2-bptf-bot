@@ -1,0 +1,10 @@
+{
+  "extends": "@bptf/config/tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

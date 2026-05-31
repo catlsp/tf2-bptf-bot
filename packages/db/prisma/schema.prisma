@@ -1,0 +1,131 @@
+// Prisma schema for tf2-bptf-bot. Target: Neon Postgres (free tier).
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Item {
+  id         String   @id @default(cuid())
+  defindex   Int
+  quality    Int
+  craftable  Boolean
+  killstreak Int      @default(0)
+  australium Boolean  @default(false)
+  effect     Int? // for unusuals (unused for now)
+  skuKey     String   @unique // "defindex;quality;..."
+  name       String
+  createdAt  DateTime @default(now())
+
+  inventory InventoryItem[]
+  listings  Listing[]
+  trades    Trade[]
+  prices    PriceSnapshot[]
+}
+
+model InventoryItem {
+  id               String          @id @default(cuid())
+  assetId          String          @unique
+  itemId           String
+  item             Item            @relation(fields: [itemId], references: [id])
+  acquiredAt       DateTime        @default(now())
+  acquiredPriceRef Float
+  status           InventoryStatus @default(HELD)
+  reservedFor      String? // listing or trade ID
+}
+
+enum InventoryStatus {
+  HELD
+  LISTED
+  RESERVED
+  SOLD
+}
+
+model Listing {
+  id            String        @id @default(cuid())
+  bptfListingId String?       @unique
+  itemId        String
+  item          Item          @relation(fields: [itemId], references: [id])
+  intent        ListingIntent
+  priceRef      Float
+  fairValueRef  Float
+  active        Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  closedAt      DateTime?
+  closedReason  String?
+}
+
+enum ListingIntent {
+  BUY
+  SELL
+}
+
+model Trade {
+  id             String        @id @default(cuid())
+  steamOfferId   String        @unique
+  partnerSteamId String
+  itemId         String
+  item           Item          @relation(fields: [itemId], references: [id])
+  intent         ListingIntent
+  priceRef       Float
+  fairValueRef   Float
+  profitRef      Float?
+  status         TradeStatus
+  createdAt      DateTime      @default(now())
+  completedAt    DateTime?
+  errorMessage   String?
+}
+
+enum TradeStatus {
+  PENDING
+  SENT
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  CANCELED
+  FAILED
+}
+
+model PriceSnapshot {
+  id         String   @id @default(cuid())
+  itemId     String
+  item       Item     @relation(fields: [itemId], references: [id])
+  buyRef     Float?
+  sellRef    Float?
+  source     String // "bptf-autoprice"
+  capturedAt DateTime @default(now())
+
+  @@index([itemId, capturedAt])
+}
+
+model WatchlistEntry {
+  id        String  @id @default(cuid())
+  skuKey    String  @unique
+  maxBuyRef Float
+  minSellRef Float?
+  active    Boolean @default(true)
+  priority  Int     @default(0)
+  notes     String?
+}
+
+model BotConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model EventLog {
+  id        String   @id @default(cuid())
+  type      String
+  level     String
+  message   String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([type, createdAt])
+  @@index([createdAt])
+}

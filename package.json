@@ -1,0 +1,24 @@
+{
+  "name": "tf2-bptf-bot",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20 <21"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "db:generate": "pnpm --filter @bptf/db generate",
+    "db:migrate": "pnpm --filter @bptf/db migrate",
+    "db:push": "pnpm --filter @bptf/db push",
+    "bot": "pnpm --filter @bptf/bot dev",
+    "telegram": "pnpm --filter @bptf/telegram dev"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.3",
+    "typescript": "^5.6.3"
+  }
+}

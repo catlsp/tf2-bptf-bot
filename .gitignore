@@ -1,0 +1,33 @@
+node_modules/
+dist/
+build/
+.turbo/
+coverage/
+
+# secrets — never commit
+.env
+.env.*
+!.env.example
+*.maFile
+sentry/
+.steam-session/
+steam-cache/
+*.sentry
+
+# logs
+*.log
+logs/
+pino-*.log
+
+# prisma
+packages/db/prisma/*.db
+packages/db/prisma/migrations/dev.db*
+
+# os / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# pnpm
+.pnpm-store/

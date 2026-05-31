@@ -1,0 +1,9 @@
+{
+  "name": "@bptf/config",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "tsconfig.base.json",
+    "eslint-config.js"
+  ]
+}

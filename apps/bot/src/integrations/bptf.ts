@@ -56,6 +56,34 @@ class RateLimiter {
 
 const limiter = new RateLimiter(env.BPTF_MAX_REQ_PER_MIN);
 
+// bp.tf's POST /classifieds/list/v1 has its own much stricter limit (~1 req / 120s),
+// separate from the general 60/min budget. Serialize those POSTs with a minimum
+// gap so we never trip it — and keep it independent so reads aren't blocked.
+class IntervalLimiter {
+  private last = 0;
+  private chain: Promise<unknown> = Promise.resolve();
+
+  constructor(private readonly minGapMs: number) {}
+
+  schedule<T>(fn: () => Promise<T>): Promise<T> {
+    const run = async (): Promise<T> => {
+      const wait = this.last + this.minGapMs - Date.now();
+      if (wait > 0) await sleep(wait);
+      this.last = Date.now();
+      return fn();
+    };
+    const result = this.chain.then(run, run); // serialize regardless of prior outcome
+    this.chain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+}
+
+// 130s gap = 120s bp.tf limit + 10s safety.
+const classifiedsLimiter = new IntervalLimiter(130_000);
+
 const http: AxiosInstance = axios.create({
   baseURL: BASE,
   timeout: 15_000,
@@ -226,14 +254,27 @@ interface BptfCreateListingResponse {
  * BUY: assetId omitted, item sent. SELL: assetId required (Phase 4+).
  * Endpoint: POST /classifieds/list/v1 (auth = user token).
  */
-export async function createListing(
-  params: CreateListingParams,
-): Promise<{ bptfListingId: string | null; queued: boolean }> {
+export type CreateListingResult =
+  | { bptfListingId: string | null; queued: boolean }
+  | { skipped: true; reason: string };
+
+export async function createListing(params: CreateListingParams): Promise<CreateListingResult> {
   if (params.intent === 'sell' && !params.assetId) {
     throw new Error('createListing: sell listings require assetId');
   }
   if (params.intent === 'buy' && params.assetId) {
     throw new Error('createListing: buy listings must not have assetId');
+  }
+
+  // Refuse to send junk to bp.tf — a missing/zero defindex or missing quality
+  // would create a garbage listing. Fail fast (no rate-limit slot consumed).
+  if (!params.defindex || params.defindex === 0) {
+    logger.warn({ defindex: params.defindex, quality: params.quality }, 'createListing skipped: invalid defindex');
+    return { skipped: true, reason: 'invalid_defindex' };
+  }
+  if (!params.quality && params.quality !== 0) {
+    logger.warn({ defindex: params.defindex, quality: params.quality }, 'createListing skipped: missing quality');
+    return { skipped: true, reason: 'missing_quality' };
   }
 
   const item: Record<string, unknown> = {
@@ -255,7 +296,7 @@ export async function createListing(
   if (params.intent === 'buy') listingPayload.item = item;
   else listingPayload.id = params.assetId;
 
-  return limiter.schedule(async () => {
+  return classifiedsLimiter.schedule(async () => {
     const resp = await http.post('/classifieds/list/v1', {
       token: env.BPTF_USER_TOKEN,
       listings: [listingPayload],
@@ -331,17 +372,19 @@ export async function listMyListings(): Promise<MyListing[]> {
       throw new BptfApiError(`bp.tf listMyListings returned ${resp.status}`, resp.status, '/classifieds/listings/v1');
     }
     const data = resp.data as BptfMyListingsResponse;
-    return (data.listings ?? []).map((l) => ({
-      bptfListingId: l.id,
-      intent: l.intent === 0 ? ('buy' as const) : ('sell' as const),
-      defindex: l.item?.defindex ?? 0,
-      quality: l.item?.quality ?? 6,
-      craftable: !l.item?.flag_cannot_craft,
-      priceKeys: l.currencies?.keys ?? 0,
-      priceMetal: l.currencies?.metal ?? 0,
-      bumpedAt: l.bump,
-      createdAt: l.created,
-    }));
+    return (data.listings ?? [])
+      .filter((l) => l.item?.defindex !== undefined && l.item?.quality !== undefined)
+      .map((l) => ({
+        bptfListingId: l.id,
+        intent: l.intent === 0 ? ('buy' as const) : ('sell' as const),
+        defindex: l.item!.defindex,
+        quality: l.item!.quality,
+        craftable: !l.item?.flag_cannot_craft,
+        priceKeys: l.currencies?.keys ?? 0,
+        priceMetal: l.currencies?.metal ?? 0,
+        bumpedAt: l.bump,
+        createdAt: l.created,
+      }));
   });
 }
 

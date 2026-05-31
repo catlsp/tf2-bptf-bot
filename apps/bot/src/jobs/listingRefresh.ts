@@ -211,6 +211,16 @@ export async function runOnce(): Promise<void> {
           details,
         });
 
+        // Validation rejected the listing before any POST — record and move on.
+        if ('skipped' in result) {
+          await prisma.ourListing.update({
+            where: { id: dbRow.id },
+            data: { status: 'failed', errorMessage: `skipped: ${result.reason}` },
+          });
+          skipped++;
+          continue;
+        }
+
         // bp.tf is async — listing is queued; real id is resolved later by listingReconcile.
         await prisma.ourListing.update({
           where: { id: dbRow.id },

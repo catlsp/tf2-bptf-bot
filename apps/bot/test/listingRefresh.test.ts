@@ -184,6 +184,20 @@ describe('listingRefresh — Phase 2 BUY maker', () => {
     expect(r.metal).toBe(6.93);
   });
 
+  it('13. createListing returns skipped → DB row failed, not pending', async () => {
+    h.redis.smembers.mockResolvedValue(['30;6']);
+    h.createListing.mockResolvedValue({ skipped: true, reason: 'invalid_defindex' });
+    await runOnce();
+    const failed = h.prisma.ourListing.update.mock.calls.find(
+      (c) => (c[0] as { data?: { status?: string } }).data?.status === 'failed',
+    );
+    expect(failed).toBeDefined();
+    const pending = h.prisma.ourListing.update.mock.calls.find(
+      (c) => (c[0] as { data?: { status?: string } }).data?.status === 'pending',
+    );
+    expect(pending).toBeUndefined();
+  });
+
   it('bonus: deleteAllOurListings deletes every active listing', async () => {
     h.prisma.ourListing.findMany.mockResolvedValue([activeRow({ bptfListingId: '111' }), activeRow({ id: 'a2', bptfListingId: '222' })]);
     await deleteAllOurListings('manual');

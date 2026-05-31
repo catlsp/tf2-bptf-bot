@@ -27,8 +27,26 @@
 
 The client enforces ≤60 req/min internally (`BPTF_MAX_REQ_PER_MIN`). If you see
 HTTP 429 in logs, you've either raised the cap (don't) or another process shares
-the key. With a 20-SKU watchlist at 2 calls/SKU + 1 key-price call, a scan is ~41
-requests — comfortably under the ceiling for a 60s interval.
+the key. Since PR2 the scanner reads listings from the **Redis order book** (fed
+by the WebSocket), so a scan makes only **one** bp.tf call total — the per-scan
+key-price refresh. Listing data no longer costs API requests, which is what lets
+the watch list grow to 300 SKUs.
+
+## Real-time order book (PR2)
+
+Listings arrive over `wss://ws.backpack.tf/events` and land in Redis
+(`bptf:ob:*`). The watch list is rebuilt daily from pricedb.io's most-recently-
+updated SKUs (`config/watch-list.json` → `bptf:ob:watch`). Quick checks:
+
+```bash
+redis-cli SCARD bptf:ob:watch                 # watched SKUs (≈300, or 4 on seed)
+redis-cli ZCARD "bptf:ob:5021;6:sells"        # key sell listings
+redis-cli INFO memory | grep used_memory_human# stays well under 50MB (30m TTLs)
+```
+
+If the WS or pricedb.io is down the bot degrades gracefully: the last good
+`watch-list.json` stays loaded, the WS reconnects with backoff, and Redis blips
+are buffered (100 events) and replayed.
 
 ## Promoting through phases
 

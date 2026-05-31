@@ -121,6 +121,27 @@ See [docs/operations.md](docs/operations.md) and
 
 ---
 
+## Real-time order book (PR2)
+
+The scanner no longer polls bp.tf per SKU. Instead:
+
+- `src/ws/bptfWs.ts` holds a 24/7 connection to `wss://ws.backpack.tf/events` and
+  streams listing updates into a Redis order book (`src/orderbook/orderBook.ts`).
+- `src/watchlist/refreshWatchList.ts` rebuilds the watch list daily from
+  pricedb.io's most-liquid SKUs into `config/watch-list.json` →
+  `bptf:ob:watch` (currency SKUs always included as a fallback).
+- The scanner reads `getOrderBook(sku)` from Redis and derives fair value from the
+  live book midpoint — one bp.tf call per scan (key price) instead of hundreds.
+
+Graceful degradation: WS auto-reconnects with capped backoff; pricedb.io failures
+keep the last good watch list; brief Redis outages buffer the 100 most recent WS
+events and replay on reconnect. Listing HASHes carry a 30-minute TTL so memory
+stays under ~50 MB.
+
+Smoke checks after deploy: `redis-cli SCARD bptf:ob:watch`,
+`redis-cli ZCARD "bptf:ob:5021;6:sells"`, and watch the logs for `[ws] connected`,
+`[watchlist] loaded N SKUs`, and `[ob] applyUpdate`.
+
 ## Phase roadmap
 
 Phase 1 (this build): scan + paper trade + Telegram, zero offers. Phases 2–10:

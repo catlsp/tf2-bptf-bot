@@ -10,6 +10,9 @@ import { registerOfferHandler } from './trading/offerHandler.js';
 import { startScanner, stopScanner } from './jobs/scanner.js';
 import { startInventorySync, publishBalanceSummary } from './jobs/inventorySync.js';
 import { startListingRefresh } from './jobs/listingRefresh.js';
+import { initOrderBook, loadWatchList } from './orderbook/orderBook.js';
+import { startWatchListScheduler, stopWatchListScheduler } from './watchlist/refreshWatchList.js';
+import * as bptfWs from './ws/bptfWs.js';
 
 // Sole entry point. Boots infra, logs in to Steam, then starts the periodic
 // jobs. Mirrors bot.js's top-level wiring but gated behind a single async main()
@@ -28,6 +31,16 @@ async function main(): Promise<void> {
   await connectDb();
   await initEmergencyStop();
   await ensureSeeded();
+
+  // --- PR2: real-time order book + dynamic watch list ---
+  initOrderBook(); // register Redis-ready replay handler
+  try {
+    await loadWatchList(); // seed/last-good watch-list.json into Redis (survives pricedb outage)
+  } catch (e) {
+    logger.warn({ err: errMessage(e) }, '[watchlist] initial load failed; scheduler will retry');
+  }
+  startWatchListScheduler(); // refresh from pricedb.io now + every 24h
+  bptfWs.start(); // connect to wss://ws.backpack.tf/events
 
   // Steam login → confirm Steam Guard → idle. Paper mode never sends offers, but
   // we still log in to read the shared inventory (under the steam lock).
@@ -54,6 +67,8 @@ process.on('unhandledRejection', (r) => logger.error({ err: errMessage(r) }, 'un
 
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'shutting down');
+  bptfWs.stop();
+  stopWatchListScheduler();
   stopScanner();
   await disconnectRedis();
   process.exit(0);

@@ -1,10 +1,13 @@
 import type { FairValue, MarketSnapshot } from '@bptf/types';
-import { fetchAutoprice, fetchListings } from '../integrations/bptf.js';
-import { defindexFromSkuKey, round2 } from '../lib/utils.js';
-import { logEvent } from '../integrations/db.js';
+import { round2 } from '../lib/utils.js';
+import { logger } from '../lib/logger.js';
+import { getOrderBook } from '../orderbook/orderBook.js';
 
-// Builds a single market view for one SKU: pull bp.tf autoprice + live
-// classifieds, then derive fairValueRef, lowest sell, and highest buy.
+// Builds a single market view for one SKU from the real-time Redis order book
+// (fed by the bp.tf WebSocket). No per-SKU bp.tf API calls happen here — that
+// would blow the 60 req/min ceiling at watch-list scale. Fair value is the
+// order-book midpoint; autoprice is reserved for the key→ref rate (refreshed once
+// per scan in the scanner).
 
 export interface SkuRef {
   skuKey: string;
@@ -13,38 +16,27 @@ export interface SkuRef {
   craftable: boolean;
 }
 
-/** Mid-point fair value, preferring autoprice but sanity-checked against the book. */
-function deriveFairValue(
-  autoBuy: number | null,
-  autoSell: number | null,
-  lowestSell: number | null,
-  highestBuy: number | null,
-): number {
-  if (autoBuy != null && autoSell != null) return round2((autoBuy + autoSell) / 2);
+/** Mid-point fair value from the live order book. */
+function deriveFairValue(lowestSell: number | null, highestBuy: number | null): number {
   if (lowestSell != null && highestBuy != null) return round2((lowestSell + highestBuy) / 2);
-  if (autoSell != null) return autoSell;
   if (lowestSell != null) return lowestSell;
   if (highestBuy != null) return highestBuy;
   return 0;
 }
 
 export async function getMarketSnapshot(sku: SkuRef): Promise<{ fair: FairValue; market: MarketSnapshot }> {
-  const defindex = defindexFromSkuKey(sku.skuKey);
-  const [auto, book] = await Promise.all([
-    fetchAutoprice({ skuKey: sku.skuKey, name: sku.name, quality: sku.quality }),
-    fetchListings({ skuKey: sku.skuKey, defindex, quality: sku.quality, craftable: sku.craftable }),
-  ]);
+  const book = await getOrderBook(sku.skuKey);
 
-  const lowestSell = book.sell[0]?.priceRef ?? null;
-  const highestBuy = book.buy[0]?.priceRef ?? null;
-  const fairValueRef = deriveFairValue(auto.buyRef, auto.sellRef, lowestSell, highestBuy);
+  const lowestSell = book.sells[0]?.priceRef ?? null;
+  const highestBuy = book.buys[0]?.priceRef ?? null;
+  const fairValueRef = deriveFairValue(lowestSell, highestBuy);
 
   const fair: FairValue = {
     skuKey: sku.skuKey,
     fairValueRef,
-    buyRef: auto.buyRef,
-    sellRef: auto.sellRef,
-    source: 'bptf-autoprice',
+    buyRef: highestBuy,
+    sellRef: lowestSell,
+    source: 'bptf-orderbook',
     capturedAt: new Date(),
   };
 
@@ -53,16 +45,13 @@ export async function getMarketSnapshot(sku: SkuRef): Promise<{ fair: FairValue;
     fairValueRef,
     lowestSellRef: lowestSell,
     highestBuyRef: highestBuy,
-    sellCount: book.sell.length,
-    buyCount: book.buy.length,
+    sellCount: book.sells.length,
+    buyCount: book.buys.length,
   };
 
-  await logEvent({
-    type: 'pricing.snapshot',
-    level: 'info',
-    message: `fair value for ${sku.name}`,
-    payload: { ...market, autoBuy: auto.buyRef, autoSell: auto.sellRef },
-  });
+  if (market.sellCount > 0 || market.buyCount > 0) {
+    logger.debug({ ...market }, `[ob] snapshot ${sku.skuKey}`);
+  }
 
   return { fair, market };
 }

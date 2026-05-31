@@ -4,6 +4,9 @@ import { env } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import { getSeedWatchlist } from './seed.js';
 import { defindexFromSkuKey } from '../lib/utils.js';
+import { getWatchedSkus } from '../orderbook/orderBook.js';
+import { getSkuName } from './refreshWatchList.js';
+import { parseSku } from '../util/itemToSku.js';
 
 // Runtime watchlist. On first boot we persist the seed; thereafter the active
 // rows in WatchlistEntry are the source of truth so /watchlist edits and the
@@ -21,25 +24,34 @@ export async function ensureSeeded(): Promise<void> {
 }
 
 /**
- * Active SKUs to scan. We hydrate name/quality/craftable from the seed catalog
- * when available, falling back to defindex-derived fields for runtime-added rows.
+ * Active SKUs to scan. Primary source is the dynamic order-book watch set
+ * (pricedb.io top-liquid, loaded into Redis). Names are hydrated from the pricedb
+ * name cache; quality/craftable are parsed from the SKU. Falls back to the DB
+ * seed list if the watch set is empty (e.g. Redis cold / pricedb down at boot).
  */
 export async function getActiveWatchlist(): Promise<SkuRef[]> {
-  const rows = await prisma.watchlistEntry.findMany({
-    where: { active: true },
-    orderBy: { priority: 'desc' },
-  });
+  const watched = await getWatchedSkus().catch(() => [] as string[]);
+  if (watched.length > 0) {
+    const seedByKey = new Map(getSeedWatchlist(1000).map((s) => [s.skuKey, s]));
+    return Promise.all(
+      watched.map(async (sku): Promise<SkuRef> => {
+        const seed = seedByKey.get(sku);
+        if (seed) return seed;
+        const { quality, craftable } = parseSku(sku);
+        const name = (await getSkuName(sku)) ?? `defindex ${defindexFromSkuKey(sku)}`;
+        return { skuKey: sku, name, quality, craftable };
+      }),
+    );
+  }
+
+  // fallback: Phase 1 DB seed
+  const rows = await prisma.watchlistEntry.findMany({ where: { active: true }, orderBy: { priority: 'desc' } });
   const seedByKey = new Map(getSeedWatchlist(1000).map((s) => [s.skuKey, s]));
   return rows.map((r) => {
     const seed = seedByKey.get(r.skuKey);
     if (seed) return seed;
-    const parts = r.skuKey.split(';');
-    return {
-      skuKey: r.skuKey,
-      name: r.notes ?? `defindex ${defindexFromSkuKey(r.skuKey)}`,
-      quality: Number(parts[1] ?? 6),
-      craftable: !parts.includes('uncraftable'),
-    };
+    const { quality, craftable } = parseSku(r.skuKey);
+    return { skuKey: r.skuKey, name: r.notes ?? `defindex ${defindexFromSkuKey(r.skuKey)}`, quality, craftable };
   });
 }
 

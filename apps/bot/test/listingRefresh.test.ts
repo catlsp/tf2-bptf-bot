@@ -7,13 +7,20 @@ const h = vi.hoisted(() => ({
   env: {
     PAPER_LISTINGS: false,
     BUY_DISCOUNT_PCT: 20,
+    SELL_MARKUP_PCT: 12,
     LISTING_PRICE_DRIFT_PCT: 2,
     MAX_LISTINGS: 30,
     LISTING_DETAILS_TEMPLATE: 'Bot offering {priceRef} ref',
     BPTF_LISTING_DELAY_MS: 0,
     LISTING_REFRESH_INTERVAL_SEC: 1800,
+    STALE_AUTOPRICE_PCT: 10,
+    LIVE_MARKET_WEIGHT: 0.7,
   } as Record<string, unknown>,
-  prisma: { ourListing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn() } },
+  prisma: {
+    ourListing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    inventoryItem: { findMany: vi.fn(), update: vi.fn() },
+    listing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+  },
   logEvent: vi.fn(),
   redis: { smembers: vi.fn() },
   createListing: vi.fn(),
@@ -47,7 +54,7 @@ vi.mock('../src/lib/logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { runOnce, startListingRefresh, deleteAllOurListings } from '../src/jobs/listingRefresh.js';
+import { runOnce, startListingRefresh, deleteAllOurListings, buildMarketSnapshot } from '../src/jobs/listingRefresh.js';
 import { refToKeysAndMetal } from '../src/pricing/listingPricer.js';
 
 function activeRow(over: Partial<Record<string, unknown>> = {}) {
@@ -61,6 +68,9 @@ beforeEach(() => {
   h.env.MAX_LISTINGS = 30;
   h.env.LISTING_PRICE_DRIFT_PCT = 2;
   h.env.BUY_DISCOUNT_PCT = 20;
+  h.env.SELL_MARKUP_PCT = 12;
+  h.env.STALE_AUTOPRICE_PCT = 10;
+  h.env.LIVE_MARKET_WEIGHT = 0.7;
   h.isStopped.mockResolvedValue(false);
   h.refreshKeyPrice.mockResolvedValue(63);
   h.currentKeyRef.mockReturnValue(63);
@@ -73,7 +83,16 @@ beforeEach(() => {
   h.fetchAutoprice.mockResolvedValue({ skuKey: 'x', buyRef: 10, sellRef: 12 });
   h.createListing.mockResolvedValue({ bptfListingId: null, queued: true });
   h.deleteListing.mockResolvedValue(undefined);
-  h.getOrderBook.mockResolvedValue({ buys: [], sells: [] });
+  // A sell floor must exist for evaluateListingBuyPrice to produce a price.
+  // With autoprice buyRef=10 + sell floor 12 + discount 20%, desired buy = 8 ref
+  // (same value the old computeBuyPrice produced), so the existing assertions hold.
+  h.getOrderBook.mockResolvedValue({ buys: [], sells: [{ priceRef: 12 }] });
+  // SELL loop is a no-op by default: bot owns nothing.
+  h.prisma.inventoryItem.findMany.mockResolvedValue([]);
+  h.prisma.inventoryItem.update.mockResolvedValue({});
+  h.prisma.listing.findMany.mockResolvedValue([]);
+  h.prisma.listing.create.mockResolvedValue({ id: 'sell1' });
+  h.prisma.listing.update.mockResolvedValue({});
 });
 
 describe('listingRefresh — Phase 2 BUY maker', () => {
@@ -105,7 +124,7 @@ describe('listingRefresh — Phase 2 BUY maker', () => {
     h.redis.smembers.mockResolvedValue(['30;6']);
     h.prisma.ourListing.findMany.mockResolvedValue([activeRow({ priceRef: 8 })]);
     h.listMyListings.mockResolvedValue([{ bptfListingId: '111', intent: 'buy' }]);
-    h.fetchAutoprice.mockResolvedValue({ buyRef: 10 }); // computeBuyPrice → 8 == existing
+    h.fetchAutoprice.mockResolvedValue({ buyRef: 10 }); // evaluateListingBuyPrice → 8 == existing
     await runOnce();
     expect(h.createListing).not.toHaveBeenCalled();
     expect(h.deleteListing).not.toHaveBeenCalled();
@@ -115,7 +134,7 @@ describe('listingRefresh — Phase 2 BUY maker', () => {
     h.redis.smembers.mockResolvedValue(['30;6']);
     h.prisma.ourListing.findMany.mockResolvedValue([activeRow({ priceRef: 8 })]);
     h.listMyListings.mockResolvedValue([{ bptfListingId: '111', intent: 'buy' }]);
-    h.fetchAutoprice.mockResolvedValue({ buyRef: 12 }); // → 9.6, 20% drift
+    h.fetchAutoprice.mockResolvedValue({ buyRef: 12 }); // → 9.6 (min of 11.89 undercut, 9.6 discount), 20% drift
     await runOnce();
     expect(h.deleteListing).toHaveBeenCalledWith('111');
     expect(h.createListing).toHaveBeenCalledTimes(1);
@@ -203,5 +222,41 @@ describe('listingRefresh — Phase 2 BUY maker', () => {
     await deleteAllOurListings('manual');
     expect(h.deleteListing).toHaveBeenCalledWith('111');
     expect(h.deleteListing).toHaveBeenCalledWith('222');
+  });
+});
+
+describe('buildMarketSnapshot — smart autoprice (trend protection)', () => {
+  const meta = { defindex: 30, quality: 6, craftable: true };
+
+  it('stale autoprice (sell floor > 10% below) → blends toward live floor', async () => {
+    // autoprice 3.0, live floor 2.5 (drop 16.7% > 10%) → 2.5*0.7 + 3.0*0.3 = 2.65
+    h.getSkuName.mockResolvedValue('Some Item');
+    h.fetchAutoprice.mockResolvedValue({ buyRef: 3.0 });
+    h.getOrderBook.mockResolvedValue({ buys: [], sells: [{ priceRef: 2.5 }] });
+    const m = await buildMarketSnapshot('30;6', meta);
+    expect(m).toEqual({ fairValueRef: 2.65, lowestSellRef: 2.5, highestBuyRef: null });
+  });
+
+  it('autoprice within tolerance (drop < 10%) → uses autoprice as fair value', async () => {
+    // autoprice 3.0, live floor 2.9 (drop 3.3% < 10%) → fv = 3.0
+    h.getSkuName.mockResolvedValue('Some Item');
+    h.fetchAutoprice.mockResolvedValue({ buyRef: 3.0 });
+    h.getOrderBook.mockResolvedValue({ buys: [], sells: [{ priceRef: 2.9 }] });
+    const m = await buildMarketSnapshot('30;6', meta);
+    expect(m?.fairValueRef).toBe(3.0);
+  });
+
+  it('no autoprice → order-book midpoint', async () => {
+    h.getSkuName.mockResolvedValue(null); // no name → no autoprice lookup
+    h.getOrderBook.mockResolvedValue({ buys: [{ priceRef: 2.0 }], sells: [{ priceRef: 2.5 }] });
+    const m = await buildMarketSnapshot('30;6', meta);
+    expect(m?.fairValueRef).toBe(2.25);
+  });
+
+  it('no autoprice and empty book → null', async () => {
+    h.getSkuName.mockResolvedValue(null);
+    h.getOrderBook.mockResolvedValue({ buys: [], sells: [] });
+    const m = await buildMarketSnapshot('30;6', meta);
+    expect(m).toBeNull();
   });
 });

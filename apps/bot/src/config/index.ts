@@ -44,8 +44,13 @@ const schema = z.object({
   PAPER_TRADING: boolish(true),
   EMERGENCY_STOP: boolish(false),
 
-  BUY_DISCOUNT_PCT: numFromStr(20, 0, 90),
+  BUY_DISCOUNT_PCT: numFromStr(8, 0, 90),
   SELL_MARKUP_PCT: numFromStr(12, 0, 200),
+  // Smart autoprice: if the live sell floor is more than STALE_AUTOPRICE_PCT
+  // below the autoprice buy, treat autoprice as stale and blend toward the live
+  // floor with LIVE_MARKET_WEIGHT (1 = trust live floor fully).
+  STALE_AUTOPRICE_PCT: numFromStr(10, 0, 50),
+  LIVE_MARKET_WEIGHT: numFromStr(0.7, 0, 1),
   MAX_HOLD_DAYS: numFromStr(7, 1),
   MAX_POSITION_PER_SKU: numFromStr(3, 1),
   MAX_DAILY_TRADES: numFromStr(30, 1),

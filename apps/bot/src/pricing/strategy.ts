@@ -70,3 +70,91 @@ export function evaluate(input: StrategyInput): TradeDecision | null {
 
   return null;
 }
+
+// One scrap on the bp.tf grid (9 scrap = 1 refined). Used to undercut the sell
+// floor by the minimum meaningful step.
+const SCRAP_INCREMENT = 0.11;
+
+/**
+ * The three market figures the listing pricer needs. A narrower view than the
+ * full {@link MarketSnapshot} so callers (and tests) only have to supply what
+ * matters for pricing a BUY listing.
+ */
+export interface ListingMarket {
+  fairValueRef: number;
+  lowestSellRef: number | null;
+  highestBuyRef: number | null;
+}
+
+export interface ListingPriceInput {
+  skuKey: string;
+  market: ListingMarket;
+}
+
+/**
+ * Decide the buy-listing price for a SKU from its full market snapshot. Returns
+ * null when listing would be unsafe or pointless:
+ *   - fair value missing or below the dust threshold
+ *   - no sell floor to anchor against (dead one-sided market)
+ *   - computed buy would not beat the current best buy order (not competitive)
+ *
+ * Pricing rule:
+ *   targetBuy = min(
+ *     lowestSellRef - SCRAP_INCREMENT,        // never bid at/above the sell floor
+ *     applyDiscount(fairValueRef, BUY_DISCOUNT_PCT)
+ *   )
+ * Then guard: targetBuy must be strictly above highestBuyRef, else we're not
+ * competitive and shouldn't add another dead listing.
+ *
+ * This is the listing-side mirror of {@link evaluate}: same market-aware logic
+ * (sell-floor undercut + competitive-vs-best-bid) the scanner already uses.
+ */
+export function evaluateListingBuyPrice(input: ListingPriceInput): number | null {
+  const { market } = input;
+  const fv = market.fairValueRef;
+  if (fv < MIN_VIABLE_REF) return null;
+  if (market.lowestSellRef == null) return null; // no sell-side market → don't list
+
+  const discounted = applyDiscount(fv, env.BUY_DISCOUNT_PCT);
+  const undercutSell = round2(market.lowestSellRef - SCRAP_INCREMENT);
+  const targetBuy = Math.min(undercutSell, discounted);
+
+  if (targetBuy <= 0) return null;
+  if (market.highestBuyRef != null && targetBuy <= market.highestBuyRef) {
+    // at or below the existing best bid — listing wouldn't be competitive
+    return null;
+  }
+  return round2(targetBuy);
+}
+
+/**
+ * Decide the sell-listing price for an item we own.
+ *
+ * Pricing rule:
+ *   targetSell = max(applyMarkup(fv, SELL_MARKUP_PCT), highestBuyRef + 1 scrap)
+ * then, if a sell floor exists, undercut it by one scrap — but never below the
+ * markup floor (that would sell at a loss).
+ *
+ * Returns null when:
+ *   - fair value is dust (< MIN_VIABLE_REF)
+ *   - undercutting the floor would drop us below the markup floor (no margin)
+ *   - the target wouldn't clear fair value (no profit)
+ */
+export function evaluateListingSellPrice(input: ListingPriceInput): number | null {
+  const { market } = input;
+  const fv = market.fairValueRef;
+  if (fv < MIN_VIABLE_REF) return null;
+
+  const markup = applyMarkup(fv, env.SELL_MARKUP_PCT);
+  const aboveBid = market.highestBuyRef != null ? round2(market.highestBuyRef + SCRAP_INCREMENT) : 0;
+  let targetSell = Math.max(markup, aboveBid);
+
+  if (market.lowestSellRef != null) {
+    const undercut = round2(market.lowestSellRef - SCRAP_INCREMENT);
+    if (undercut < markup) return null; // can't undercut the floor without losing margin
+    targetSell = Math.min(targetSell, undercut);
+  }
+
+  if (targetSell <= fv) return null; // no margin over fair value
+  return round2(targetSell);
+}

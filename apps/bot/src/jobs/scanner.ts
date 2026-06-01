@@ -50,6 +50,9 @@ async function scanOnce(): Promise<void> {
       try {
         const { market } = await getMarketSnapshot(sku);
         const decision = evaluate({ skuKey: sku.skuKey, name: sku.name, market });
+        if (process.env.SCANNER_VERBOSE === '1') {
+          logger.info({ skuKey: sku.skuKey, market, decision }, 'scanner.cycle.decision');
+        }
         if (!decision) continue;
 
         opportunities++;

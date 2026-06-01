@@ -26,13 +26,30 @@ function roundToScrap(metalRef: number): number {
 }
 
 /**
- * BUY price from fair value: fairValueRef * (1 - BUY_DISCOUNT_PCT/100).
- * Returns null when fair value is missing/zero (cannot price safely).
+ * @deprecated Use `evaluateListingBuyPrice()` from `pricing/strategy.ts`. This
+ * naive `fairValue * (1 - BUY_DISCOUNT_PCT)` ignored the live sell floor and the
+ * competing buy orders, so it produced listings far below market that never
+ * filled. Kept for back-compat only; not imported by listingRefresh anymore.
  */
 export function computeBuyPrice(fairValueRef: number | null): number | null {
   if (!fairValueRef || fairValueRef <= 0) return null;
   const discount = env.BUY_DISCOUNT_PCT / 100;
   return round2(fairValueRef * (1 - discount));
+}
+
+/**
+ * Mirror bp.tf's scrap-grid rendering. bp.tf shows metal in the TF2 notation
+ * `ref.scrap` where the decimals encode whole scrap (1 scrap = 0.11, 9 scrap =
+ * 1 ref) and any sub-scrap remainder is floored — e.g. a sent metal of 2.30 is
+ * 2 ref + 2.7 scrap, which renders as 2.22 (2 ref + 2 scrap). We floor to match
+ * exactly what a trader sees on the listing card, so the description text never
+ * disagrees with the price card.
+ */
+export function quantizeForDisplay(metalRef: number): number {
+  if (metalRef <= 0) return 0;
+  const refPart = Math.floor(metalRef + 1e-9);
+  const scrap = Math.floor((metalRef - refPart) * 9 + 1e-9); // 0..8 whole scrap
+  return round2(refPart + scrap * 0.11);
 }
 
 /** True when two prices differ by more than LISTING_PRICE_DRIFT_PCT. */

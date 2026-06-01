@@ -3,6 +3,7 @@ import { env } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import { BptfApiError } from '../lib/errors.js';
 import { sleep, round2 } from '../lib/utils.js';
+import { quantizeForDisplay } from '../pricing/listingPricer.js';
 
 // backpack.tf REST client with a hard 60 req/min ceiling.
 //
@@ -292,6 +293,16 @@ export async function createListing(params: CreateListingParams): Promise<Create
     festivized: false,
     flag_cannot_craft: !params.craftable,
   };
+
+  // Defense-in-depth: if the metal we're about to send isn't on bp.tf's display
+  // grid, the rendered price card will differ from the {priceRef} in details.
+  const displayed = quantizeForDisplay(params.priceMetal);
+  if (Math.abs(displayed - params.priceMetal) > 0.005) {
+    logger.warn(
+      { defindex: params.defindex, priceMetal: params.priceMetal, willDisplayAs: displayed },
+      'createListing: priceMetal not on bp.tf display grid — description may show a different price',
+    );
+  }
 
   const listingPayload: Record<string, unknown> = {
     intent: params.intent === 'buy' ? 0 : 1, // bp.tf: 0=buy, 1=sell

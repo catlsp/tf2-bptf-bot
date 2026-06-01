@@ -4,11 +4,21 @@ import { describe, it, expect, vi } from 'vitest';
 // throw without real Steam creds), so we mock the config with just the knobs the
 // pricing functions read.
 const h = vi.hoisted(() => ({
-  env: { BUY_DISCOUNT_PCT: 8, SELL_MARKUP_PCT: 12 } as Record<string, unknown>,
+  env: {
+    BUY_DISCOUNT_PCT: 8,
+    SELL_MARKUP_PCT: 12,
+    MM_MAX_BUY_REF: undefined as number | undefined,
+    MM_MIN_SPREAD_SCRAP: 1,
+  } as Record<string, unknown>,
 }));
 vi.mock('../src/config/index.js', () => ({ env: h.env, loadEnv: () => h.env }));
 
-import { evaluateListingBuyPrice, evaluateListingSellPrice } from '../src/pricing/strategy.js';
+import {
+  evaluateListingBuyPrice,
+  evaluateListingSellPrice,
+  evaluateMarketMakingBuy,
+  evaluateMarketMakingSell,
+} from '../src/pricing/strategy.js';
 
 describe('evaluateListingBuyPrice', () => {
   it('discount caps the price when it is below the sell-floor undercut', () => {
@@ -91,5 +101,39 @@ describe('evaluateListingSellPrice', () => {
       market: { fairValueRef: 0.04, lowestSellRef: 1, highestBuyRef: null },
     });
     expect(result).toBeNull();
+  });
+});
+
+describe('evaluateMarketMakingBuy', () => {
+  it('bids one scrap above the highest existing buy order', () => {
+    const r = evaluateMarketMakingBuy({ buys: [{ priceRef: 70.55 }, { priceRef: 70.44 }], sells: [] });
+    expect(r).toBe(70.66);
+  });
+
+  it('returns null when there are no buy orders to beat', () => {
+    expect(evaluateMarketMakingBuy({ buys: [], sells: [{ priceRef: 72.11 }] })).toBeNull();
+  });
+
+  it('caps the bid at MM_MAX_BUY_REF when set', () => {
+    h.env.MM_MAX_BUY_REF = 70.0;
+    const r = evaluateMarketMakingBuy({ buys: [{ priceRef: 70.55 }], sells: [] });
+    expect(r).toBe(70.0);
+    h.env.MM_MAX_BUY_REF = undefined;
+  });
+});
+
+describe('evaluateMarketMakingSell', () => {
+  it('undercuts the lowest ask by one scrap when above the cost floor', () => {
+    const r = evaluateMarketMakingSell({ buys: [], sells: [{ priceRef: 72.11 }, { priceRef: 72.22 }] }, 70.66);
+    expect(r).toBe(72.0);
+  });
+
+  it('returns null when there are no asks to undercut', () => {
+    expect(evaluateMarketMakingSell({ buys: [{ priceRef: 70.0 }], sells: [] }, 50)).toBeNull();
+  });
+
+  it('returns null when undercutting would dip below cost + min spread', () => {
+    // lowest 71.00 → undercut 70.89; cost 71.00 + 1 scrap = 71.11 > 70.89 → null
+    expect(evaluateMarketMakingSell({ buys: [], sells: [{ priceRef: 71.0 }] }, 71.0)).toBeNull();
   });
 });

@@ -51,6 +51,21 @@ const schema = z.object({
   // floor with LIVE_MARKET_WEIGHT (1 = trust live floor fully).
   STALE_AUTOPRICE_PCT: numFromStr(10, 0, 50),
   LIVE_MARKET_WEIGHT: numFromStr(0.7, 0, 1),
+
+  // === MVP simple market-making ===
+  // 'market_making' = undercut sell floor / overbid buy floor by one scrap.
+  // 'arbitrage'     = the smart-autoprice buy/sell evaluators (kept for later).
+  STRATEGY_MODE: z.enum(['market_making', 'arbitrage']).default('market_making'),
+  // Optional hard ceiling on what a BUY listing will bid (ref). Empty = no cap.
+  MM_MAX_BUY_REF: z
+    .string()
+    .optional()
+    .transform((v) => (v == null || v === '' ? undefined : Number(v)))
+    .refine((n) => n === undefined || Number.isFinite(n), 'must be a number'),
+  // Minimum spread over cost basis a SELL must keep, in scrap (1 scrap = 0.11 ref).
+  MM_MIN_SPREAD_SCRAP: numFromStr(1, 0),
+  // 'manual' pins the watch-list to config/watch-list.json (no pricedb auto-refresh).
+  WATCHLIST_MODE: z.enum(['manual', 'auto']).default('manual'),
   MAX_HOLD_DAYS: numFromStr(7, 1),
   MAX_POSITION_PER_SKU: numFromStr(3, 1),
   MAX_DAILY_TRADES: numFromStr(30, 1),

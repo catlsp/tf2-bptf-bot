@@ -245,21 +245,40 @@ interface CreateListingParams {
   assetId?: string; // sell only — required for sell, MUST be undefined for buy
 }
 
-interface BptfCreateListingResponse {
-  listings?: Record<string, { created?: number; error?: string }>;
-  cap?: number;
-  promotes_remaining?: number;
+// v2 single listing (subset of fields we use). Synchronous create returns this.
+interface V2ItemDocument {
+  defindex?: number;
+  quality?: number | { id?: number };
+  craftable?: boolean;
+  flag_cannot_craft?: boolean;
+}
+interface V2Listing {
+  id: string;
+  intent?: 'buy' | 'sell';
+  item?: V2ItemDocument;
+  currencies?: { keys?: number; metal?: number };
 }
 
-/**
- * POST bp.tf classifieds — create a new listing.
- * BUY: assetId omitted, item sent. SELL: assetId required (Phase 4+).
- * Endpoint: POST /classifieds/list/v1 (auth = user token).
- */
+/** bp.tf v2 currencies map: always metal, keys only when non-zero. */
+function currenciesOf(priceKeys: number, priceMetal: number): Record<string, number> {
+  const c: Record<string, number> = { metal: round2(priceMetal) };
+  if (priceKeys > 0) c.keys = priceKeys;
+  return c;
+}
+
 export type CreateListingResult =
   | { bptfListingId: string | null; queued: boolean }
   | { skipped: true; reason: string };
 
+/**
+ * Create a listing — POST /v2/classifieds/listings (auth: ?token=USER_TOKEN).
+ * v2 is SYNCHRONOUS: the response carries the real listing id, so we return it
+ * immediately (no queue/reconcile dance like the old v1 path).
+ *   BUY  → body.item = { item: name, quality, craftable }  (itemResolvable)
+ *   SELL → body.id   = <inventory assetid>
+ * Return shape kept identical to the v1 era; runtime now sets a real
+ * bptfListingId with queued:false.
+ */
 export async function createListing(params: CreateListingParams): Promise<CreateListingResult> {
   if (params.intent === 'sell' && !params.assetId) {
     throw new Error('createListing: sell listings require assetId');
@@ -268,105 +287,95 @@ export async function createListing(params: CreateListingParams): Promise<Create
     throw new Error('createListing: buy listings must not have assetId');
   }
 
-  // Refuse to send junk to bp.tf — a missing/zero defindex or missing quality
-  // would create a garbage listing. Fail fast (no rate-limit slot consumed).
-  if (!params.defindex || params.defindex === 0) {
-    logger.warn({ defindex: params.defindex, quality: params.quality }, 'createListing skipped: invalid defindex');
-    return { skipped: true, reason: 'invalid_defindex' };
-  }
-  if (!params.quality && params.quality !== 0) {
-    logger.warn({ defindex: params.defindex, quality: params.quality }, 'createListing skipped: missing quality');
-    return { skipped: true, reason: 'missing_quality' };
-  }
-  if (!params.itemName || params.itemName.trim() === '') {
-    logger.warn({ defindex: params.defindex, quality: params.quality }, 'createListing skipped: missing item name');
-    return { skipped: true, reason: 'missing_name' };
+  // BUY listings are resolved by item identity, so validate it. SELL listings are
+  // resolved by assetId, so name/defindex aren't required there.
+  if (params.intent === 'buy') {
+    if (!params.defindex || params.defindex === 0) {
+      logger.warn({ defindex: params.defindex }, 'createListing skipped: invalid defindex');
+      return { skipped: true, reason: 'invalid_defindex' };
+    }
+    if (!params.quality && params.quality !== 0) {
+      logger.warn({ defindex: params.defindex }, 'createListing skipped: missing quality');
+      return { skipped: true, reason: 'missing_quality' };
+    }
+    if (!params.itemName || params.itemName.trim() === '') {
+      logger.warn({ defindex: params.defindex }, 'createListing skipped: missing item name');
+      return { skipped: true, reason: 'missing_name' };
+    }
   }
 
-  const item: Record<string, unknown> = {
-    defindex: params.defindex,
-    item_name: params.itemName, // required for bp.tf schema resolution (icon + title)
-    quality: params.quality,
-    craftable: params.craftable,
-    killstreak: 0,
-    australium: false,
-    festivized: false,
-    flag_cannot_craft: !params.craftable,
-  };
-
-  // Defense-in-depth: if the metal we're about to send isn't on bp.tf's display
-  // grid, the rendered price card will differ from the {priceRef} in details.
+  // Defense-in-depth: warn if metal isn't on bp.tf's display grid.
   const displayed = quantizeForDisplay(params.priceMetal);
   if (Math.abs(displayed - params.priceMetal) > 0.005) {
     logger.warn(
       { defindex: params.defindex, priceMetal: params.priceMetal, willDisplayAs: displayed },
-      'createListing: priceMetal not on bp.tf display grid — description may show a different price',
+      'createListing: priceMetal not on bp.tf display grid — description may differ from price card',
     );
   }
 
-  const listingPayload: Record<string, unknown> = {
-    intent: params.intent === 'buy' ? 0 : 1, // bp.tf: 0=buy, 1=sell
-    currencies: { keys: params.priceKeys, metal: params.priceMetal },
+  const body: Record<string, unknown> = {
+    currencies: currenciesOf(params.priceKeys, params.priceMetal),
     details: params.details,
   };
+  if (params.intent === 'buy') {
+    body.item = { item: params.itemName, quality: params.quality, craftable: params.craftable };
+  } else {
+    body.id = Number(params.assetId);
+  }
 
-  if (params.intent === 'buy') listingPayload.item = item;
-  else listingPayload.id = params.assetId;
-
-  return classifiedsLimiter.schedule(async () => {
-    const resp = await http.post('/classifieds/list/v1', {
-      token: env.BPTF_USER_TOKEN,
-      listings: [listingPayload],
-    });
-
-    if (resp.status !== 200) {
+  return limiter.schedule(async () => {
+    const resp = await http.post('/v2/classifieds/listings', body, { params: { token: env.BPTF_USER_TOKEN } });
+    if (resp.status < 200 || resp.status >= 300) {
       throw new BptfApiError(
         `bp.tf createListing returned ${resp.status}: ${JSON.stringify(resp.data)}`,
         resp.status,
-        '/classifieds/list/v1',
+        '/v2/classifieds/listings',
       );
     }
-
-    const data = resp.data as BptfCreateListingResponse;
-    const firstKey = Object.keys(data.listings ?? {})[0];
-    const entry = firstKey ? data.listings?.[firstKey] : undefined;
-
-    if (!entry) {
-      throw new BptfApiError('bp.tf createListing: no response entry', 200, '/classifieds/list/v1');
+    const data = resp.data as V2Listing;
+    if (!data?.id) {
+      throw new BptfApiError('bp.tf createListing: response missing listing id', resp.status, '/v2/classifieds/listings');
     }
-    if (entry.error) {
-      throw new BptfApiError(`bp.tf createListing failed: ${entry.error}`, 200, '/classifieds/list/v1');
-    }
-    // bp.tf classifieds/list/v1 is async since 2024+: response.created is a queue counter,
-    // NOT the real listing id. The real id arrives ~30-60s later and must be fetched via
-    // GET /classifieds/listings/v1. See jobs/listingReconcile.ts.
-    return { bptfListingId: null, queued: true };
+    return { bptfListingId: String(data.id), queued: false };
   });
 }
 
-/** DELETE a listing by bp.tf id. Endpoint: DELETE /classifieds/delete/v1. */
-export async function deleteListing(bptfListingId: string): Promise<void> {
+/**
+ * Update a listing's price in place — PATCH /v2/classifieds/listings/{id}.
+ * Preferred over delete+recreate on price drift (one request, keeps bump age).
+ */
+export async function updateListingPrice(
+  listingId: string,
+  priceKeys: number,
+  priceMetal: number,
+  details?: string,
+): Promise<void> {
   return limiter.schedule(async () => {
-    const resp = await http.delete('/classifieds/delete/v1', {
-      data: { token: env.BPTF_USER_TOKEN, listing_ids: [bptfListingId] },
+    const body: Record<string, unknown> = { currencies: currenciesOf(priceKeys, priceMetal) };
+    if (details != null) body.details = details;
+    const resp = await http.patch(`/v2/classifieds/listings/${encodeURIComponent(listingId)}`, body, {
+      params: { token: env.BPTF_USER_TOKEN },
     });
-    if (resp.status !== 200) {
-      throw new BptfApiError(`bp.tf deleteListing returned ${resp.status}`, resp.status, '/classifieds/delete/v1');
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new BptfApiError(
+        `bp.tf updateListingPrice returned ${resp.status}: ${JSON.stringify(resp.data)}`,
+        resp.status,
+        '/v2/classifieds/listings/{id}',
+      );
     }
   });
 }
 
-interface BptfMyListingsResponse {
-  listings?: Array<{
-    id: string;
-    intent: number;
-    item?: { defindex: number; quality: number; flag_cannot_craft?: boolean };
-    currencies: { keys?: number; metal?: number };
-    details?: string;
-    bump?: number;
-    created?: number;
-  }>;
-  cap?: number;
+/** DELETE a listing by id — DELETE /v2/classifieds/listings/{id}. */
+export async function deleteListing(listingId: string): Promise<void> {
+  return limiter.schedule(async () => {
+    const resp = await http.delete(`/v2/classifieds/listings/${encodeURIComponent(listingId)}`, {
+      params: { token: env.BPTF_USER_TOKEN },
+    });
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new BptfApiError(`bp.tf deleteListing returned ${resp.status}`, resp.status, '/v2/classifieds/listings/{id}');
+    }
+  });
 }
 
 export interface MyListing {
@@ -377,65 +386,62 @@ export interface MyListing {
   craftable: boolean;
   priceKeys: number;
   priceMetal: number;
-  bumpedAt?: number;
-  createdAt?: number;
 }
 
-/** GET our active listings on bp.tf, to reconcile DB state. Endpoint: GET /classifieds/listings/v1. */
-export async function listMyListings(): Promise<MyListing[]> {
-  return limiter.schedule(async () => {
-    const resp = await http.get('/classifieds/listings/v1', { params: { token: env.BPTF_USER_TOKEN } });
-    if (resp.status !== 200) {
-      throw new BptfApiError(`bp.tf listMyListings returned ${resp.status}`, resp.status, '/classifieds/listings/v1');
-    }
-    const data = resp.data as BptfMyListingsResponse;
-    return (data.listings ?? [])
-      .filter((l) => l.item?.defindex !== undefined && l.item?.quality !== undefined)
-      .map((l) => ({
-        bptfListingId: l.id,
-        intent: l.intent === 0 ? ('buy' as const) : ('sell' as const),
-        defindex: l.item!.defindex,
-        quality: l.item!.quality,
-        craftable: !l.item?.flag_cannot_craft,
-        priceKeys: l.currencies?.keys ?? 0,
-        priceMetal: l.currencies?.metal ?? 0,
-        bumpedAt: l.bump,
-        createdAt: l.created,
-      }));
-  });
+interface V2ListResponse {
+  results?: V2Listing[];
+  listings?: V2Listing[];
+}
+
+function qualityId(q: number | { id?: number } | undefined): number {
+  if (q == null) return 6;
+  return typeof q === 'object' ? q.id ?? 6 : q;
+}
+
+function mapV2(l: V2Listing): MyListing | null {
+  if (l.item?.defindex == null) return null;
+  return {
+    bptfListingId: String(l.id),
+    intent: l.intent === 'sell' ? 'sell' : 'buy',
+    defindex: l.item.defindex,
+    quality: qualityId(l.item.quality),
+    craftable: l.item.flag_cannot_craft ? false : l.item.craftable ?? true,
+    priceKeys: l.currencies?.keys ?? 0,
+    priceMetal: l.currencies?.metal ?? 0,
+  };
 }
 
 /**
- * GET bp.tf my listings, shaped for the listingReconcile matcher. Resolves the
- * real listing id after async (queued) creation.
+ * GET our active listings — GET /v2/classifieds/listings. Response shape is
+ * mapped defensively (results[] or listings[]) since v2 pagination wasn't
+ * exercised live yet; only bptfListingId is load-bearing for reconcile.
  */
-export async function getMyListings(): Promise<
-  Array<{
-    id: string;
-    intent: number;
-    defindex: number;
-    quality: number;
-    craftable: boolean;
-    keys: number;
-    metal: number;
-  }>
-> {
+export async function listMyListings(): Promise<MyListing[]> {
   return limiter.schedule(async () => {
-    const resp = await http.get('/classifieds/listings/v1', { params: { token: env.BPTF_USER_TOKEN } });
-    if (resp.status !== 200) {
-      throw new BptfApiError(`bp.tf getMyListings returned ${resp.status}`, resp.status, '/classifieds/listings/v1');
+    const resp = await http.get('/v2/classifieds/listings', {
+      params: { token: env.BPTF_USER_TOKEN, limit: 100 },
+    });
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new BptfApiError(`bp.tf listMyListings returned ${resp.status}`, resp.status, '/v2/classifieds/listings');
     }
-    const data = resp.data as BptfMyListingsResponse;
-    return (data.listings ?? [])
-      .filter((l) => l.item?.defindex !== undefined)
-      .map((l) => ({
-        id: l.id,
-        intent: l.intent,
-        defindex: l.item!.defindex,
-        quality: l.item!.quality,
-        craftable: l.item!.flag_cannot_craft !== true,
-        keys: l.currencies.keys ?? 0,
-        metal: l.currencies.metal ?? 0,
-      }));
+    const data = resp.data as V2ListResponse;
+    const rows = data.results ?? data.listings ?? [];
+    return rows.map(mapV2).filter((x): x is MyListing => x !== null);
   });
+}
+
+/** Shaped for the listingReconcile matcher (mostly vestigial now that v2 create is synchronous). */
+export async function getMyListings(): Promise<
+  Array<{ id: string; intent: number; defindex: number; quality: number; craftable: boolean; keys: number; metal: number }>
+> {
+  const rows = await listMyListings();
+  return rows.map((l) => ({
+    id: l.bptfListingId,
+    intent: l.intent === 'buy' ? 0 : 1,
+    defindex: l.defindex,
+    quality: l.quality,
+    craftable: l.craftable,
+    keys: l.priceKeys,
+    metal: l.priceMetal,
+  }));
 }

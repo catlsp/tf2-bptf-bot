@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import axios from 'axios';
 import { redis } from '../integrations/redis.js';
+import { env } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import { errMessage } from '../lib/errors.js';
 import { loadWatchList, WATCH_LIST_PATH } from '../orderbook/orderBook.js';
@@ -45,6 +46,18 @@ function toEpoch(v: string | number | undefined): number {
 }
 
 export async function refreshWatchList(): Promise<void> {
+  // Manual mode pins the list to config/watch-list.json. Never fetch pricedb,
+  // never overwrite — just (re)load the hardcoded file into Redis.
+  if (env.WATCHLIST_MODE === 'manual') {
+    try {
+      const count = await loadWatchList();
+      logger.info({ count }, '[watchlist] manual mode — pinned to config/watch-list.json, auto-refresh disabled');
+    } catch (e) {
+      logger.warn({ err: errMessage(e) }, '[watchlist] manual reload failed');
+    }
+    return;
+  }
+
   let rows: PriceRow[];
   try {
     const resp = await axios.get(PRICEDB_URL, { timeout: 20_000, validateStatus: () => true });

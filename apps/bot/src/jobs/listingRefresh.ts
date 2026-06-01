@@ -5,6 +5,7 @@ import { redis } from '../integrations/redis.js';
 import {
   createListing,
   deleteListing,
+  updateListingPrice,
   listMyListings,
   fetchAutoprice,
   refreshKeyPrice,
@@ -12,12 +13,19 @@ import {
   type MyListing,
 } from '../integrations/bptf.js';
 import { refToKeysAndMetal, hasPriceDrifted, quantizeForDisplay } from '../pricing/listingPricer.js';
-import { evaluateListingBuyPrice, evaluateListingSellPrice, type ListingMarket } from '../pricing/strategy.js';
+import {
+  evaluateListingBuyPrice,
+  evaluateListingSellPrice,
+  evaluateMarketMakingBuy,
+  evaluateMarketMakingSell,
+  type ListingMarket,
+} from '../pricing/strategy.js';
 import {
   getOwnedListableItems,
   markListed,
   type OwnedItem,
 } from '../inventory/inventoryService.js';
+import { safeLoadMetal } from '../integrations/steam.js';
 import { isStopped } from '../risk/emergencyStop.js';
 import { sleep, round2 } from '../lib/utils.js';
 import { errMessage } from '../lib/errors.js';
@@ -168,11 +176,20 @@ export async function runOnce(): Promise<void> {
 
     let totalActive = currentBuyListings.length;
     let created = 0;
+    let updated = 0;
     let deleted = 0;
     let skipped = 0;
     let errors = 0;
     let sellCreated = 0;
     let sellUpdated = 0;
+
+    // Market-making BUYs must be funded by liquid metal we actually hold. Compute
+    // the spendable refined once (reserve held back). Arbitrage mode is ungated.
+    let availableRef = Infinity;
+    if (env.STRATEGY_MODE === 'market_making') {
+      const counts = await safeLoadMetal();
+      availableRef = round2(Math.max(0, counts.refinedTotal - env.TF2VAULT_RESERVE_REFINED));
+    }
 
     for (const skuKey of watchSkus) {
       if (isCurrencySku(skuKey)) {
@@ -186,33 +203,59 @@ export async function runOnce(): Promise<void> {
         continue;
       }
 
-      const market = await buildMarketSnapshot(skuKey, meta);
-      const desiredPriceRef = market ? evaluateListingBuyPrice({ skuKey, market }) : null;
+      let desiredPriceRef: number | null;
+      let fairValueRef: number;
+      if (env.STRATEGY_MODE === 'market_making') {
+        const ob = await getOrderBook(skuKey);
+        desiredPriceRef = evaluateMarketMakingBuy(ob);
+        fairValueRef = desiredPriceRef ?? 0;
+        // Balance gate: only bid what we can actually fund. Not an error — the
+        // natural state until a sale tops the wallet back up.
+        if (desiredPriceRef != null && availableRef < desiredPriceRef) {
+          logger.warn(
+            { skuKey, desiredPriceRef, availableRef },
+            'insufficient funds for BUY listing — skipping (will retry once balance recovers)',
+          );
+          skipped++;
+          continue;
+        }
+      } else {
+        const market = await buildMarketSnapshot(skuKey, meta);
+        desiredPriceRef = market ? evaluateListingBuyPrice({ skuKey, market }) : null;
+        fairValueRef = market?.fairValueRef ?? 0;
+      }
       if (!desiredPriceRef || desiredPriceRef <= 0) {
-        // No sell-side market, not competitive, or dust — don't spam a dead listing.
+        // No book to anchor on, not competitive, or dust — don't spam a dead listing.
         skipped++;
         continue;
       }
-      const fairValueRef = market!.fairValueRef;
 
       const existing = bySkuKey.get(skuKey);
       if (existing) {
         if (hasPriceDrifted(Number(existing.priceRef), desiredPriceRef)) {
+          // v2: update price in place (PATCH) rather than delete+recreate.
+          const { keys, metal } = refToKeysAndMetal(desiredPriceRef);
+          const displayedTotal = round2(keys * currentKeyRef() + quantizeForDisplay(metal));
+          const details = env.LISTING_DETAILS_TEMPLATE.replace('{priceRef}', String(displayedTotal));
           try {
-            if (existing.bptfListingId) await deleteListing(existing.bptfListingId);
-            await prisma.ourListing.update({ where: { id: existing.id }, data: { status: 'deleted', deletedAt: new Date() } });
-            totalActive--;
-            deleted++;
-            bySkuKey.delete(skuKey); // fallthrough → recreate below
+            if (existing.bptfListingId) {
+              await updateListingPrice(existing.bptfListingId, keys, metal, details);
+            } else {
+              logger.warn({ skuKey, id: existing.id }, 'drift: missing bptfListingId — patching local row only');
+            }
+            await prisma.ourListing.update({
+              where: { id: existing.id },
+              data: { priceRef: desiredPriceRef, priceKeys: keys, priceMetal: metal, details, refreshedAt: new Date() },
+            });
+            updated++;
           } catch (e) {
             errors++;
-            logger.warn({ err: errMessage(e), skuKey }, 'delete on drift failed');
-            continue;
+            logger.warn({ err: errMessage(e), skuKey }, 'patch on drift failed');
           }
         } else {
           skipped++;
-          continue;
         }
+        continue; // PATCH in place — never fall through to create a duplicate
       }
 
       if (totalActive >= env.MAX_LISTINGS) {
@@ -270,10 +313,15 @@ export async function runOnce(): Promise<void> {
           continue;
         }
 
-        // bp.tf is async — listing is queued; real id is resolved later by listingReconcile.
+        // v2 create is synchronous: a real id means 'active' immediately. A null id
+        // (legacy/queued path or a mock) stays 'pending' for listingReconcile.
         await prisma.ourListing.update({
           where: { id: dbRow.id },
-          data: { bptfListingId: result.bptfListingId, status: 'pending', refreshedAt: new Date() },
+          data: {
+            bptfListingId: result.bptfListingId,
+            status: result.bptfListingId ? 'active' : 'pending',
+            refreshedAt: new Date(),
+          },
         });
 
         totalActive++;
@@ -282,7 +330,7 @@ export async function runOnce(): Promise<void> {
         await logEvent({
           type: 'listing.created',
           level: 'info',
-          message: `BUY listing ${skuKey} @ ${desiredPriceRef} ref (${keys}k + ${metal}r) [queued]`,
+          message: `BUY listing ${skuKey} @ ${desiredPriceRef} ref (${keys}k + ${metal}r)`,
           payload: { bptfListingId: result.bptfListingId, queued: result.queued, skuKey, priceRef: desiredPriceRef, keys, metal },
         });
         await publish({
@@ -309,21 +357,21 @@ export async function runOnce(): Promise<void> {
 
     const durationMs = Date.now() - startedAt;
     logger.info(
-      { created, deleted, skipped, errors, sellCreated, sellUpdated, totalActive, durationMs },
+      { created, updated, deleted, skipped, errors, sellCreated, sellUpdated, totalActive, durationMs },
       'listing refresh complete',
     );
 
     await logEvent({
       type: 'listing.refresh.summary',
       level: 'info',
-      message: `refresh: +${created} -${deleted} ~${skipped} err=${errors} active=${totalActive} sell:+${sellCreated}~${sellUpdated}`,
-      payload: { created, deleted, skipped, errors, sellCreated, sellUpdated, totalActive, durationMs },
+      message: `refresh: +${created} ^${updated} -${deleted} ~${skipped} err=${errors} active=${totalActive} sell:+${sellCreated}~${sellUpdated}`,
+      payload: { created, updated, deleted, skipped, errors, sellCreated, sellUpdated, totalActive, durationMs },
     });
     await publish({
       type: 'listing.refresh.summary',
       level: 'info',
       at: nowIso(),
-      payload: { created, deleted, skipped, errors, sellCreated, sellUpdated, totalActive, durationMs },
+      payload: { created, updated, deleted, skipped, errors, sellCreated, sellUpdated, totalActive, durationMs },
     });
   } catch (e) {
     logger.error({ err: errMessage(e) }, 'listing refresh tick failed');
@@ -361,32 +409,38 @@ async function refreshSellListings(): Promise<{ created: number; updated: number
     const meta = parseSkuKey(skuKey);
     if (!meta) continue;
 
-    const market = await buildMarketSnapshot(skuKey, meta);
-    if (!market) continue;
-    const desiredPriceRef = evaluateListingSellPrice({ skuKey, market });
-    if (!desiredPriceRef) {
-      logger.debug({ skuKey, market }, 'sell evaluator returned null');
-      continue;
+    // Resolve a per-item SELL price + a fair value for the row, by strategy mode.
+    // market_making prices each asset against its own cost basis (acquiredPriceRef);
+    // arbitrage prices the whole SKU once off the market snapshot.
+    let priceFor: (item: OwnedItem) => number | null;
+    let fairValueRef: number;
+    if (env.STRATEGY_MODE === 'market_making') {
+      const ob = await getOrderBook(skuKey);
+      fairValueRef = ob.sells[0]?.priceRef ?? ob.buys[0]?.priceRef ?? 0;
+      priceFor = (item) => evaluateMarketMakingSell(ob, item.acquiredPriceRef);
+    } else {
+      const market = await buildMarketSnapshot(skuKey, meta);
+      if (!market) continue;
+      fairValueRef = market.fairValueRef;
+      const skuPrice = evaluateListingSellPrice({ skuKey, market });
+      priceFor = () => skuPrice;
     }
 
     for (const ownedItem of items) {
+      const desiredPriceRef = priceFor(ownedItem);
+      if (!desiredPriceRef) {
+        logger.debug({ skuKey, itemId: ownedItem.itemId }, 'sell evaluator returned null');
+        continue;
+      }
       const existing = sellByItemId.get(ownedItem.itemId);
       try {
         if (existing) {
           if (hasPriceDrifted(existing.priceRef, desiredPriceRef)) {
-            if (existing.bptfListingId) await deleteListing(existing.bptfListingId);
-            await prisma.listing.update({
-              where: { id: existing.id },
-              data: { active: false, closedAt: new Date(), closedReason: 'price_drift' },
-            });
-            const row = await createSellListing({ skuKey, meta, item: ownedItem, priceRef: desiredPriceRef, market });
-            if (row) {
-              await markListed(ownedItem.inventoryItemId, row.id);
-              updated++;
-            }
+            await patchSellListing(existing, skuKey, desiredPriceRef);
+            updated++;
           }
         } else {
-          const row = await createSellListing({ skuKey, meta, item: ownedItem, priceRef: desiredPriceRef, market });
+          const row = await createSellListing({ skuKey, meta, item: ownedItem, priceRef: desiredPriceRef, fairValueRef });
           if (row) {
             await markListed(ownedItem.inventoryItemId, row.id);
             created++;
@@ -402,6 +456,23 @@ async function refreshSellListings(): Promise<{ created: number; updated: number
   return { created, updated, errors };
 }
 
+/** PATCH an existing SELL listing's price in place (v2), updating the local row. */
+async function patchSellListing(
+  existing: { id: string; bptfListingId: string | null },
+  skuKey: string,
+  priceRef: number,
+): Promise<void> {
+  const { keys, metal } = refToKeysAndMetal(priceRef);
+  const displayedTotal = round2(keys * currentKeyRef() + quantizeForDisplay(metal));
+  const details = `Selling for ${displayedTotal} ref. Send a trade offer.`;
+  if (existing.bptfListingId) {
+    await updateListingPrice(existing.bptfListingId, keys, metal, details);
+  } else {
+    logger.warn({ skuKey, listingId: existing.id }, 'sell drift: missing bptfListingId — patching local row only');
+  }
+  await prisma.listing.update({ where: { id: existing.id }, data: { priceRef: displayedTotal } });
+}
+
 /**
  * Create one SELL listing on bp.tf for an owned asset and persist a Listing row.
  * Reuses the same bp.tf client as BUY (it already supports intent='sell' +
@@ -413,9 +484,9 @@ async function createSellListing(args: {
   meta: SkuMeta;
   item: OwnedItem;
   priceRef: number;
-  market: ListingMarket;
+  fairValueRef: number;
 }): Promise<{ id: string } | null> {
-  const { skuKey, meta, item, priceRef, market } = args;
+  const { skuKey, meta, item, priceRef, fairValueRef } = args;
 
   const { keys, metal } = refToKeysAndMetal(priceRef);
   const displayedTotal = round2(keys * currentKeyRef() + quantizeForDisplay(metal));
@@ -439,14 +510,14 @@ async function createSellListing(args: {
     return null;
   }
 
-  // bp.tf is async — bptfListingId resolves later; store what we have.
+  // v2 create is synchronous: bptfListingId is the real id (or null in a mock).
   const row = await prisma.listing.create({
     data: {
       bptfListingId: result.bptfListingId,
       itemId: item.itemId,
       intent: 'SELL',
       priceRef: displayedTotal,
-      fairValueRef: market.fairValueRef,
+      fairValueRef,
       active: true,
     },
   });

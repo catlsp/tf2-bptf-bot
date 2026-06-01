@@ -56,12 +56,36 @@ export async function recordPaperTrade(decision: TradeDecision): Promise<string>
 }
 
 /**
- * Phase 3 real send. Guarded twice: PAPER_TRADING must be false AND the caller
- * must opt in. Left intentionally unimplemented for Phase 1.
+ * Real outbound (taker) send. Guarded: PAPER_TRADING must be false.
+ *
+ * NOTE: a taker offer needs the counterpart's listing assetids, which the
+ * scanner's TradeDecision does not carry. Rather than crash the real-mode
+ * scanner, we record the intent (status FAILED, not sent) and return. The live
+ * real-trade path for this market-making MVP is the MAKER side — our bp.tf
+ * listings filled by inbound offers, handled in incomingTradeHandler.ts.
  */
-export async function sendRealOffer(_decision: TradeDecision): Promise<never> {
+export async function sendRealOffer(decision: TradeDecision): Promise<string> {
   if (env.PAPER_TRADING) throw new PaperGuardError('sendRealOffer');
-  throw new Error('real offer sending is implemented in Phase 3');
+  const itemId = await upsertItemForDecision(decision);
+  const trade = await prisma.trade.create({
+    data: {
+      steamOfferId: `unsent:${randomUUID()}`,
+      partnerSteamId: decision.partnerSteamId ?? 'unknown',
+      itemId,
+      intent: decision.intent,
+      priceRef: decision.priceRef,
+      fairValueRef: decision.fairValueRef,
+      profitRef: decision.expectedProfitRef,
+      status: 'FAILED',
+      errorMessage: 'outbound taker send not plumbed (no counterpart listing assetids); use maker/incoming path',
+    },
+    select: { id: true },
+  });
+  logger.warn(
+    { tradeId: trade.id, sku: decision.skuKey, intent: decision.intent },
+    'sendRealOffer: outbound taker not plumbed — recorded FAILED (not sent). Maker fills happen via incomingTradeHandler.',
+  );
+  return trade.id;
 }
 
 export { buildSkuKey };

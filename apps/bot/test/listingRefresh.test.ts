@@ -15,6 +15,12 @@ const h = vi.hoisted(() => ({
     LISTING_REFRESH_INTERVAL_SEC: 1800,
     STALE_AUTOPRICE_PCT: 10,
     LIVE_MARKET_WEIGHT: 0.7,
+    // Existing suite exercises the arbitrage path; MM mode is covered separately.
+    STRATEGY_MODE: 'arbitrage',
+    MM_MAX_BUY_REF: undefined,
+    MM_MIN_SPREAD_SCRAP: 1,
+    WATCHLIST_MODE: 'manual',
+    TF2VAULT_RESERVE_REFINED: 0,
   } as Record<string, unknown>,
   prisma: {
     ourListing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
@@ -25,6 +31,7 @@ const h = vi.hoisted(() => ({
   redis: { smembers: vi.fn() },
   createListing: vi.fn(),
   deleteListing: vi.fn(),
+  updateListingPrice: vi.fn(),
   listMyListings: vi.fn(),
   fetchAutoprice: vi.fn(),
   refreshKeyPrice: vi.fn(),
@@ -33,6 +40,7 @@ const h = vi.hoisted(() => ({
   publish: vi.fn(),
   getSkuName: vi.fn(),
   getOrderBook: vi.fn(),
+  safeLoadMetal: vi.fn(),
 }));
 
 vi.mock('../src/config/index.js', () => ({ env: h.env, loadEnv: () => h.env }));
@@ -41,11 +49,13 @@ vi.mock('../src/integrations/redis.js', () => ({ redis: h.redis }));
 vi.mock('../src/integrations/bptf.js', () => ({
   createListing: h.createListing,
   deleteListing: h.deleteListing,
+  updateListingPrice: h.updateListingPrice,
   listMyListings: h.listMyListings,
   fetchAutoprice: h.fetchAutoprice,
   refreshKeyPrice: h.refreshKeyPrice,
   currentKeyRef: h.currentKeyRef,
 }));
+vi.mock('../src/integrations/steam.js', () => ({ safeLoadMetal: h.safeLoadMetal }));
 vi.mock('../src/risk/emergencyStop.js', () => ({ isStopped: h.isStopped }));
 vi.mock('../src/events/publisher.js', () => ({ publish: h.publish, nowIso: () => 'now' }));
 vi.mock('../src/watchlist/refreshWatchList.js', () => ({ getSkuName: h.getSkuName }));
@@ -71,6 +81,10 @@ beforeEach(() => {
   h.env.SELL_MARKUP_PCT = 12;
   h.env.STALE_AUTOPRICE_PCT = 10;
   h.env.LIVE_MARKET_WEIGHT = 0.7;
+  h.env.STRATEGY_MODE = 'arbitrage';
+  h.env.MM_MAX_BUY_REF = undefined;
+  h.env.MM_MIN_SPREAD_SCRAP = 1;
+  h.env.TF2VAULT_RESERVE_REFINED = 0;
   h.isStopped.mockResolvedValue(false);
   h.refreshKeyPrice.mockResolvedValue(63);
   h.currentKeyRef.mockReturnValue(63);
@@ -83,6 +97,8 @@ beforeEach(() => {
   h.fetchAutoprice.mockResolvedValue({ skuKey: 'x', buyRef: 10, sellRef: 12 });
   h.createListing.mockResolvedValue({ bptfListingId: null, queued: true });
   h.deleteListing.mockResolvedValue(undefined);
+  h.updateListingPrice.mockResolvedValue(undefined);
+  h.safeLoadMetal.mockResolvedValue({ keys: 0, refined: 0, reclaimed: 0, scrap: 0, refinedTotal: 0 });
   // A sell floor must exist for evaluateListingBuyPrice to produce a price.
   // With autoprice buyRef=10 + sell floor 12 + discount 20%, desired buy = 8 ref
   // (same value the old computeBuyPrice produced), so the existing assertions hold.
@@ -130,14 +146,17 @@ describe('listingRefresh — Phase 2 BUY maker', () => {
     expect(h.deleteListing).not.toHaveBeenCalled();
   });
 
-  it('5. price drift > threshold → delete + recreate', async () => {
+  it('5. price drift > threshold → PATCH in place (no delete+recreate)', async () => {
     h.redis.smembers.mockResolvedValue(['30;6']);
     h.prisma.ourListing.findMany.mockResolvedValue([activeRow({ priceRef: 8 })]);
     h.listMyListings.mockResolvedValue([{ bptfListingId: '111', intent: 'buy' }]);
     h.fetchAutoprice.mockResolvedValue({ buyRef: 12 }); // → 9.6 (min of 11.89 undercut, 9.6 discount), 20% drift
     await runOnce();
-    expect(h.deleteListing).toHaveBeenCalledWith('111');
-    expect(h.createListing).toHaveBeenCalledTimes(1);
+    // v2: update price on the same listing id, never delete+recreate.
+    expect(h.updateListingPrice).toHaveBeenCalledTimes(1);
+    expect(h.updateListingPrice.mock.calls[0][0]).toBe('111');
+    expect(h.createListing).not.toHaveBeenCalled();
+    expect(h.deleteListing).not.toHaveBeenCalled();
   });
 
   it('6. MAX_LISTINGS reached → stops creating, no error', async () => {

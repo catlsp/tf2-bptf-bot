@@ -158,3 +158,46 @@ export function evaluateListingSellPrice(input: ListingPriceInput): number | nul
   if (targetSell <= fv) return null; // no margin over fair value
   return round2(targetSell);
 }
+
+// ============================================================================
+// MVP simple market making (STRATEGY_MODE=market_making)
+// Pure functions over an order-book view. No fair value, no autoprice — just
+// sit one scrap inside the spread. buys[0] = highest bid, sells[0] = lowest ask
+// (see orderbook/orderBook.ts getOrderBook ordering).
+// ============================================================================
+
+export interface OrderBookView {
+  buys: Array<{ priceRef: number }>;
+  sells: Array<{ priceRef: number }>;
+}
+
+/**
+ * BUY price = highest existing bid + 1 scrap (so we sit just above the book),
+ * capped by env.MM_MAX_BUY_REF when set. Returns null when there are no bids to
+ * beat (nothing to anchor against).
+ */
+export function evaluateMarketMakingBuy(orderbook: OrderBookView): number | null {
+  const highest = orderbook.buys[0]?.priceRef;
+  if (highest == null) return null;
+  let price = round2(highest + SCRAP_INCREMENT);
+  if (env.MM_MAX_BUY_REF != null && price > env.MM_MAX_BUY_REF) {
+    price = round2(env.MM_MAX_BUY_REF);
+  }
+  if (price <= 0) return null;
+  return price;
+}
+
+/**
+ * SELL price = lowest existing ask − 1 scrap (undercut the floor), but never
+ * below costBasis + MM_MIN_SPREAD_SCRAP scrap. Returns null when there are no
+ * asks to undercut, or undercutting would dip below the minimum spread (selling
+ * at a loss / no edge).
+ */
+export function evaluateMarketMakingSell(orderbook: OrderBookView, costBasis: number): number | null {
+  const lowest = orderbook.sells[0]?.priceRef;
+  if (lowest == null) return null;
+  const undercut = round2(lowest - SCRAP_INCREMENT);
+  const floor = round2(costBasis + env.MM_MIN_SPREAD_SCRAP * SCRAP_INCREMENT);
+  if (undercut < floor) return null;
+  return undercut;
+}

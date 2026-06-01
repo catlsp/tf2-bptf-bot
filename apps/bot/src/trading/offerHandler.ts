@@ -1,18 +1,17 @@
 import { logger } from '../lib/logger.js';
 import { env } from '../config/index.js';
+import { startIncomingOffers } from './incomingTradeHandler.js';
 
-// Inbound offer handling is Phase 4. CRITICAL: in Phase 1 we do NOT attach a
-// newOffer listener, because this bot shares its Steam account with tf2vault-bot
-// and tf2vault-bot already owns inbound-offer handling. Attaching here would make
-// both processes race to accept/decline the same offer.
-//
-// This module is left as the seam for Phase 4 (value/item validation,
-// auto-accept/decline, mobile confirmation) and is intentionally not wired up.
+// Attach inbound trade-offer handling. This Steam account is dedicated to this
+// bot (not shared), so we own inbound offers here. The listener validates each
+// offer against our active listings and auto-accepts exact matches; real Steam
+// accept/decline is gated by PAPER_TRADING inside the handler.
 
 export function registerOfferHandler(): void {
+  startIncomingOffers();
   if (env.PAPER_TRADING) {
-    logger.info('offer handler not attached (paper mode; tf2vault-bot owns inbound offers)');
-    return;
+    logger.info('offer handler attached in PAPER_TRADING mode — evaluates + logs, never touches Steam');
+  } else {
+    logger.warn('offer handler attached LIVE — matching offers will be auto-accepted on Steam');
   }
-  logger.warn('inbound offer handling is implemented in Phase 4 — no-op for now');
 }

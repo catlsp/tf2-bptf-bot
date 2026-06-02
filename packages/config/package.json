@@ -2,8 +2,13 @@
   "name": "@bptf/config",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "files": [
     "tsconfig.base.json",
     "eslint-config.js"
-  ]
+  ],
+  "dependencies": {
+    "eslint": "^9.13.0",
+    "typescript-eslint": "^8.10.0"
+  }
 }

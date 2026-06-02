@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Dark-only palette (the <html> tag is permanently .dark). gray-950 canvas,
+ * gray-900 cards, gray-800 borders, orange-500 brand. Values are HSL channels
+ * so Tailwind's hsl(var(--x)) wrappers and opacity modifiers work.
+ */
+@layer base {
+  :root,
+  .dark {
+    --background: 224 14% 6%; /* ~gray-950 */
+    --foreground: 210 20% 96%;
+
+    --card: 222 14% 9%; /* ~gray-900 */
+    --card-foreground: 210 20% 96%;
+
+    --muted: 220 13% 14%; /* ~gray-800 */
+    --muted-foreground: 217 11% 60%;
+
+    --accent: 220 13% 16%;
+    --accent-foreground: 210 20% 96%;
+
+    --border: 220 13% 18%; /* ~gray-800 */
+    --input: 220 13% 18%;
+    --ring: 24 95% 53%; /* orange-500 */
+
+    --primary: 24 95% 53%; /* orange-500 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 13% 16%;
+    --secondary-foreground: 210 20% 96%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 0%;
+
+    --radius: 0.6rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings:
+      'rlig' 1,
+      'calt' 1;
+  }
+
+  /* Slim, dark scrollbars to match the canvas. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-muted;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-border;
+  }
+}

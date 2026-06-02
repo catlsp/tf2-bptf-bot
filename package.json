@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "packageManager": "pnpm@9.12.0",
   "engines": {
-    "node": ">=20 <21"
+    "node": ">=20 <23"
   },
   "scripts": {
     "build": "turbo run build",
@@ -15,7 +15,10 @@
     "db:migrate": "pnpm --filter @bptf/db migrate",
     "db:push": "pnpm --filter @bptf/db push",
     "bot": "pnpm --filter @bptf/bot dev",
-    "telegram": "pnpm --filter @bptf/telegram dev"
+    "telegram": "pnpm --filter @bptf/telegram dev",
+    "api": "pnpm --filter @bptf/api dev",
+    "web": "pnpm --filter @bptf/web dev",
+    "dev:all": "turbo run dev --parallel --filter=@bptf/api --filter=@bptf/web"
   },
   "devDependencies": {
     "turbo": "^2.1.3",

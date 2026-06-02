@@ -4,37 +4,17 @@ import { env } from '../config/index.js';
 import { prisma } from '../integrations/db.js';
 import { logger } from '../lib/logger.js';
 import { PaperGuardError } from '../lib/errors.js';
-import { buildSkuKey, defindexFromSkuKey } from '../lib/utils.js';
+import { buildSkuKey } from '../lib/utils.js';
+import { getOrCreateItemId } from '../persistence/items.js';
 
 // Single chokepoint for turning a decision into a Trade row. In Phase 1 every
 // path lands here in PAPER mode: we persist a PENDING hypothetical trade and
 // return. The real-send branch is deliberately gated and throws until the env
 // var is flipped (Phase 3), so no Steam offer can leak out by accident.
 
-async function upsertItemForDecision(decision: TradeDecision): Promise<string> {
-  const defindex = defindexFromSkuKey(decision.skuKey);
-  const parts = decision.skuKey.split(';');
-  const quality = Number(parts[1] ?? 6);
-  const item = await prisma.item.upsert({
-    where: { skuKey: decision.skuKey },
-    create: {
-      skuKey: decision.skuKey,
-      defindex,
-      quality,
-      craftable: !parts.includes('uncraftable'),
-      killstreak: 0,
-      australium: parts.includes('australium'),
-      name: decision.name,
-    },
-    update: { name: decision.name },
-    select: { id: true },
-  });
-  return item.id;
-}
-
 /** Phase 1 entry point. Records the decision as a paper trade. */
 export async function recordPaperTrade(decision: TradeDecision): Promise<string> {
-  const itemId = await upsertItemForDecision(decision);
+  const itemId = await getOrCreateItemId(decision.skuKey, decision.name);
   const trade = await prisma.trade.create({
     data: {
       steamOfferId: `paper:${randomUUID()}`,
@@ -66,7 +46,7 @@ export async function recordPaperTrade(decision: TradeDecision): Promise<string>
  */
 export async function sendRealOffer(decision: TradeDecision): Promise<string> {
   if (env.PAPER_TRADING) throw new PaperGuardError('sendRealOffer');
-  const itemId = await upsertItemForDecision(decision);
+  const itemId = await getOrCreateItemId(decision.skuKey, decision.name);
   const trade = await prisma.trade.create({
     data: {
       steamOfferId: `unsent:${randomUUID()}`,

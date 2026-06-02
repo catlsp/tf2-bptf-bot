@@ -10,6 +10,7 @@ import { refreshKeyPrice } from '../integrations/bptf.js';
 import { isStopped } from '../risk/emergencyStop.js';
 import { publish, nowIso } from '../events/publisher.js';
 import { logEvent } from '../integrations/db.js';
+import { recordPriceSnapshot } from '../persistence/priceSnapshots.js';
 
 // Periodic market scan. Every SCANNER_INTERVAL_SEC: refresh key price, walk the
 // watchlist, build a snapshot per SKU, run the strategy, and route any decision
@@ -48,7 +49,10 @@ async function scanOnce(): Promise<void> {
 
     for (const sku of watchlist) {
       try {
-        const { market } = await getMarketSnapshot(sku);
+        const { fair, market } = await getMarketSnapshot(sku);
+        // Persist a price snapshot for every scanned SKU with market data. This
+        // self-guards against DB errors, so it never breaks the scan loop.
+        await recordPriceSnapshot(sku, fair);
         const decision = evaluate({ skuKey: sku.skuKey, name: sku.name, market });
         if (process.env.SCANNER_VERBOSE === '1') {
           logger.info({ skuKey: sku.skuKey, market, decision }, 'scanner.cycle.decision');

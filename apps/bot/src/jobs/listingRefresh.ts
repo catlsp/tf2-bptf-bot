@@ -86,6 +86,20 @@ function isCurrencySku(skuKey: string): boolean {
   return /^(5021|5002|5001|5000);/.test(skuKey);
 }
 
+// Listing descriptions carry the item name + price so the classified reads like
+// "Buying <item> for <price> ref" instead of an anonymous price. itemName may be
+// null when the pricedb name cache is cold — fall back to a neutral phrase.
+function buyDetails(itemName: string | null, displayedTotal: number): string {
+  return env.LISTING_DETAILS_TEMPLATE.replace('{itemName}', itemName ?? 'this item').replace(
+    '{priceRef}',
+    String(displayedTotal),
+  );
+}
+
+function sellDetails(itemName: string | null, displayedTotal: number): string {
+  return `Selling ${itemName ?? 'this item'} for ${displayedTotal} ref. Send a trade offer.`;
+}
+
 /**
  * Build the market snapshot a listing is priced from: fair value plus the live
  * sell floor and best buy order.
@@ -236,7 +250,8 @@ export async function runOnce(): Promise<void> {
           // v2: update price in place (PATCH) rather than delete+recreate.
           const { keys, metal } = refToKeysAndMetal(desiredPriceRef);
           const displayedTotal = round2(keys * currentKeyRef() + quantizeForDisplay(metal));
-          const details = env.LISTING_DETAILS_TEMPLATE.replace('{priceRef}', String(displayedTotal));
+          const itemName = await getSkuName(skuKey);
+          const details = buyDetails(itemName, displayedTotal);
           try {
             if (existing.bptfListingId) {
               await updateListingPrice(existing.bptfListingId, keys, metal, details);
@@ -273,7 +288,8 @@ export async function runOnce(): Promise<void> {
       // text matches the price card. metal is already on the scrap grid, but the
       // displayed total folds keys back in via the current key price.
       const displayedTotal = round2(keys * currentKeyRef() + quantizeForDisplay(metal));
-      const details = env.LISTING_DETAILS_TEMPLATE.replace('{priceRef}', String(displayedTotal));
+      const itemName = await getSkuName(skuKey);
+      const details = buyDetails(itemName, displayedTotal);
 
       // Persist 'creating' first so a hung API call doesn't lose the row.
       const dbRow = await prisma.ourListing.create({
@@ -288,8 +304,6 @@ export async function runOnce(): Promise<void> {
           status: 'creating',
         },
       });
-
-      const itemName = await getSkuName(skuKey);
 
       try {
         const result = await createListing({
@@ -464,7 +478,8 @@ async function patchSellListing(
 ): Promise<void> {
   const { keys, metal } = refToKeysAndMetal(priceRef);
   const displayedTotal = round2(keys * currentKeyRef() + quantizeForDisplay(metal));
-  const details = `Selling for ${displayedTotal} ref. Send a trade offer.`;
+  const itemName = await getSkuName(skuKey);
+  const details = sellDetails(itemName, displayedTotal);
   if (existing.bptfListingId) {
     await updateListingPrice(existing.bptfListingId, keys, metal, details);
   } else {
@@ -490,8 +505,8 @@ async function createSellListing(args: {
 
   const { keys, metal } = refToKeysAndMetal(priceRef);
   const displayedTotal = round2(keys * currentKeyRef() + quantizeForDisplay(metal));
-  const details = `Selling for ${displayedTotal} ref. Send a trade offer.`;
   const itemName = await getSkuName(skuKey);
+  const details = sellDetails(itemName, displayedTotal);
 
   const result = await createListing({
     intent: 'sell',

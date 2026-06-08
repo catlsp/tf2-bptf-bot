@@ -87,9 +87,11 @@ const schema = z.object({
   LISTING_REFRESH_INTERVAL_SEC: numFromStr(1800, 10),
   MAX_LISTINGS: numFromStr(30, 1),
   LISTING_PRICE_DRIFT_PCT: numFromStr(2, 0),
+  // {itemName} and {priceRef} are substituted per listing so the description
+  // shows what we're buying and the price.
   LISTING_DETAILS_TEMPLATE: z
     .string()
-    .default('Bot offering {priceRef} ref. Send a trade offer with this exact item, the offer will be reviewed.'),
+    .default('Buying {itemName} for {priceRef} ref. Send a trade offer or add me.'),
   BPTF_LISTING_DELAY_MS: numFromStr(1100, 0),
 });
 

@@ -10,7 +10,12 @@ module.exports = {
       interpreter: 'node',
       node_args: '--import tsx --max-old-space-size=240',
       max_memory_restart: '270M',
-      env: { NODE_ENV: 'production' },
+      // Paper flags are pinned here (not left to the pm2 daemon env) so they're
+      // explicit and version-controlled. PAPER_TRADING=true → no Steam offers.
+      // PAPER_LISTINGS=true → the bot collects the order book + prices but does
+      // NOT post real bp.tf listings. Flip PAPER_LISTINGS to 'false' here (and
+      // redeploy) only when you deliberately want live BUY listings.
+      env: { NODE_ENV: 'production', PAPER_TRADING: 'true', PAPER_LISTINGS: 'true' },
       autorestart: true,
       max_restarts: 20,
       restart_delay: 5000,

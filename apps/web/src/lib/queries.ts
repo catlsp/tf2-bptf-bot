@@ -12,6 +12,7 @@ import type {
   EventLog,
   InventoryItem,
   InventoryStatus,
+  MarketItem,
   OurListing,
   Paginated,
   PriceSnapshot,
@@ -30,6 +31,7 @@ export const queryKeys = {
   inventory: (status?: InventoryStatus) => ['inventory', status ?? 'all'] as const,
   trades: (params: TradesParams) => ['trades', params] as const,
   prices: (skuKey: string, days: number) => ['prices', skuKey, days] as const,
+  market: ['market'] as const,
 };
 
 export interface OrdersParams {
@@ -165,5 +167,13 @@ export function usePrices(
     queryKey: queryKeys.prices(skuKey ?? '', days),
     queryFn: ({ signal }) => api.prices(skuKey as string, days, signal),
     enabled: Boolean(skuKey),
+  });
+}
+
+export function useMarket(): UseQueryResult<MarketItem[]> {
+  return useQuery({
+    queryKey: queryKeys.market,
+    queryFn: ({ signal }) => api.market(signal),
+    refetchInterval: 30_000,
   });
 }

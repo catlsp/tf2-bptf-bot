@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   ListOrdered,
   ScrollText,
+  Store,
   TrendingUp,
   type LucideIcon,
 } from 'lucide-react';
@@ -24,6 +25,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/logs', label: 'Logs', icon: ScrollText },
   { to: '/inventory', label: 'Inventory', icon: Boxes },
   { to: '/trades', label: 'Trades', icon: ArrowLeftRight },
+  { to: '/market', label: 'Market', icon: Store },
   { to: '/prices', label: 'Prices', icon: TrendingUp },
 ];
 

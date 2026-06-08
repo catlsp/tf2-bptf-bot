@@ -4,6 +4,7 @@ import type {
   EventLog,
   InventoryItem,
   InventoryStatus,
+  MarketItem,
   OurListing,
   Paginated,
   PriceSnapshot,
@@ -111,4 +112,6 @@ export const api = {
 
   prices: (skuKey: string, days: number, signal?: AbortSignal): Promise<PriceSnapshot[]> =>
     request(`/api/prices/${encodeURIComponent(skuKey)}${query({ days })}`, { signal }),
+
+  market: (signal?: AbortSignal): Promise<MarketItem[]> => request('/api/market', { signal }),
 };

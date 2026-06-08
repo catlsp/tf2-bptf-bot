@@ -12,6 +12,7 @@ import { logsRoutes } from './routes/logs.js';
 import { inventoryRoutes } from './routes/inventory.js';
 import { tradesRoutes } from './routes/trades.js';
 import { pricesRoutes } from './routes/prices.js';
+import { marketRoutes } from './routes/market.js';
 import { registerLiveWs, stopLiveWs } from './ws/live.js';
 
 // Sole entry point for the management-panel API. Boots Fastify, wires the zod
@@ -64,6 +65,7 @@ async function buildServer() {
       await api.register(inventoryRoutes);
       await api.register(tradesRoutes);
       await api.register(pricesRoutes);
+      await api.register(marketRoutes);
     },
     { prefix: '/api' },
   );

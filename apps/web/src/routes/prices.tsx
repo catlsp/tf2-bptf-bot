@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/select';
 import { PriceChart } from '@/components/price-chart';
 import { EmptyState, ErrorState, TableSkeleton } from '@/components/states';
-import { usePrices, useWatchlist } from '@/lib/queries';
+import { useMarket, usePrices } from '@/lib/queries';
 
 const RANGES = [
   { label: '24h', days: 1 },
@@ -25,9 +25,12 @@ export function PricesPage(): React.JSX.Element {
   const { skuKey: routeSku } = useParams<{ skuKey: string }>();
   const [days, setDays] = useState<number>(7);
 
-  const watchlist = useWatchlist();
-  const options = watchlist.data ?? [];
+  // Source the picker from the items the bot actually tracks (those with price
+  // snapshots), not the separate WatchlistEntry table.
+  const market = useMarket();
+  const options = market.data ?? [];
   const selectedSku = routeSku ?? options[0]?.skuKey;
+  const selected = options.find((o) => o.skuKey === selectedSku);
 
   const prices = usePrices(selectedSku, days);
   const snapshots = prices.data ?? [];
@@ -38,13 +41,13 @@ export function PricesPage(): React.JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
         <Select value={selectedSku ?? ''} onValueChange={selectSku} disabled={options.length === 0}>
-          <SelectTrigger className="w-full sm:w-64">
-            <SelectValue placeholder="Select a watched SKU" />
+          <SelectTrigger className="w-full sm:w-80">
+            <SelectValue placeholder="Select a tracked item" />
           </SelectTrigger>
           <SelectContent>
-            {options.map((entry) => (
-              <SelectItem key={entry.id} value={entry.skuKey} className="font-mono">
-                {entry.skuKey}
+            {options.map((item) => (
+              <SelectItem key={item.itemId} value={item.skuKey}>
+                {item.name} <span className="text-muted-foreground">· {item.skuKey}</span>
               </SelectItem>
             ))}
           </SelectContent>
@@ -66,13 +69,19 @@ export function PricesPage(): React.JSX.Element {
 
       <Card>
         <CardHeader>
-          <CardTitle className="font-mono text-sm">{selectedSku ?? '—'}</CardTitle>
+          <CardTitle className="text-sm">
+            {selected ? selected.name : (selectedSku ?? '—')}
+            {selected ? <span className="ml-2 font-mono text-xs text-muted-foreground">{selected.skuKey}</span> : null}
+          </CardTitle>
         </CardHeader>
         <CardContent>
-          {watchlist.isLoading || (selectedSku && prices.isLoading) ? (
+          {market.isLoading || (selectedSku && prices.isLoading) ? (
             <TableSkeleton rows={6} cols={1} />
           ) : options.length === 0 ? (
-            <EmptyState title="Watchlist is empty" description="Add a SKU to start tracking prices." />
+            <EmptyState
+              title="No tracked items yet"
+              description="The bot records snapshots as it scans; items appear here within a minute or two."
+            />
           ) : prices.isError ? (
             <ErrorState message={prices.error.message} onRetry={() => void prices.refetch()} />
           ) : snapshots.length === 0 ? (

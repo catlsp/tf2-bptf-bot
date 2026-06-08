@@ -6,6 +6,7 @@ import { WatchlistPage } from './routes/watchlist';
 import { LogsPage } from './routes/logs';
 import { InventoryPage } from './routes/inventory';
 import { TradesPage } from './routes/trades';
+import { MarketPage } from './routes/market';
 import { PricesPage } from './routes/prices';
 
 export function App(): React.JSX.Element {
@@ -18,6 +19,7 @@ export function App(): React.JSX.Element {
         <Route path="logs" element={<LogsPage />} />
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="trades" element={<TradesPage />} />
+        <Route path="market" element={<MarketPage />} />
         <Route path="prices" element={<PricesPage />} />
         <Route path="prices/:skuKey" element={<PricesPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

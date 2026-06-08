@@ -99,6 +99,17 @@ export interface PriceSnapshot {
   capturedAt: string;
 }
 
+export interface MarketItem {
+  itemId: string;
+  skuKey: string;
+  name: string;
+  buyRef: number | null;
+  sellRef: number | null;
+  spreadRef: number | null;
+  source: string;
+  capturedAt: string;
+}
+
 export interface DashboardStats {
   activeOurListings: number;
   watchlistSize: number;

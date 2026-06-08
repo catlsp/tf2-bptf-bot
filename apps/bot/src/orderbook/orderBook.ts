@@ -31,11 +31,26 @@ export interface WsListingPayload {
   id: string;
   steamid?: string;
   item?: unknown;
-  intent?: number; // 0 = buy, 1 = sell
+  // bp.tf's v2 events stream sends intent as the STRING 'buy' | 'sell'. Older/
+  // alternate shapes used the numbers 0 (buy) / 1 (sell), so we accept both.
+  intent?: number | string;
   appid?: number;
   currencies?: { keys?: number; metal?: number };
   bumpedAt?: number;
   [k: string]: unknown;
+}
+
+/**
+ * Normalize a listing's intent to 'buy' | 'sell'. bp.tf v2 sends the string
+ * 'sell'; legacy numeric payloads used 1 for sell. Anything else is a buy.
+ *
+ * This was THE order-book accuracy bug: when intent arrived as 'sell' (string),
+ * the old `=== 1` check failed, so every sell listing was filed as a buy —
+ * emptying the sell side and polluting the buy side, which corrupted every price
+ * derived from the book (and in turn our listing prices).
+ */
+export function parseIntent(raw: number | string | undefined): 'buy' | 'sell' {
+  return raw === 'sell' || raw === 1 ? 'sell' : 'buy';
 }
 
 export interface OrderBookEntry {
@@ -112,7 +127,7 @@ export async function applyUpdate(payload: WsListingPayload): Promise<void> {
     return;
   }
 
-  const intent = payload.intent === 1 ? 'sell' : 'buy';
+  const intent = parseIntent(payload.intent);
   const id = payload.id;
   const zKey = intent === 'sell' ? sellsKey(sku) : buysKey(sku);
   const oppKey = intent === 'sell' ? buysKey(sku) : sellsKey(sku);

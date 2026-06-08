@@ -65,7 +65,12 @@ const schema = z.object({
   // Minimum spread over cost basis a SELL must keep, in scrap (1 scrap = 0.11 ref).
   MM_MIN_SPREAD_SCRAP: numFromStr(1, 0),
   // 'manual' pins the watch-list to config/watch-list.json (no pricedb auto-refresh).
+  // 'auto' builds it from pricedb's priced feed, filtered to affordable items.
   WATCHLIST_MODE: z.enum(['manual', 'auto']).default('manual'),
+  // Auto mode only watches items whose pricedb BUY price is pure metal (no keys)
+  // and at or below this many ref — keeps the list inside the junk-flip capital
+  // band instead of tracking key-priced items the bot can't fund.
+  WATCH_MAX_BUY_REF: numFromStr(50, 1),
   MAX_HOLD_DAYS: numFromStr(7, 1),
   MAX_POSITION_PER_SKU: numFromStr(3, 1),
   MAX_DAILY_TRADES: numFromStr(30, 1),

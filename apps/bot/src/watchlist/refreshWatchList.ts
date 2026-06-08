@@ -5,13 +5,16 @@ import { env } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import { errMessage } from '../lib/errors.js';
 import { loadWatchList, WATCH_LIST_PATH } from '../orderbook/orderBook.js';
+import { getSeedWatchlist } from './seed.js';
 
-// Builds the watch list dynamically from pricedb.io's most-recently-updated
-// (≈ most liquid) SKUs. Writes config/watch-list.json, refreshes the Redis watch
-// set, and caches names for autoprice hydration. Never overwrites a good list on
-// failure.
+// Builds the watch list dynamically from pricedb.io's priced feed, filtered to
+// affordable items (pure-metal buy at/below WATCH_MAX_BUY_REF) and unioned with
+// the hand-picked seed base, so the bot tracks a stable set of cheap, liquid junk
+// rather than key-priced items it can't fund. Writes config/watch-list.json,
+// refreshes the Redis watch set, and caches names. Never overwrites a good list
+// on failure.
 
-const PRICEDB_URL = 'https://pricedb.io/api/latest-prices';
+const PRICEDB_URL = 'https://pricedb.io/api/prices';
 const TOP_N = 300;
 const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const NAMES_KEY = 'bptf:ob:names';
@@ -22,7 +25,8 @@ const CURRENCY_FALLBACK = ['5021;6', '5002;6', '5001;6', '5000;6'];
 interface PriceRow {
   sku?: string;
   name?: string;
-  last_updated?: string | number;
+  buy?: { keys?: number; metal?: number };
+  sell?: { keys?: number; metal?: number };
 }
 
 function extractRows(data: unknown): PriceRow[] {
@@ -34,15 +38,6 @@ function extractRows(data: unknown): PriceRow[] {
     }
   }
   return [];
-}
-
-function toEpoch(v: string | number | undefined): number {
-  if (v == null) return 0;
-  if (typeof v === 'number') return v;
-  const n = Number(v);
-  if (Number.isFinite(n)) return n;
-  const t = Date.parse(v);
-  return Number.isFinite(t) ? t : 0;
 }
 
 export async function refreshWatchList(): Promise<void> {
@@ -75,16 +70,26 @@ export async function refreshWatchList(): Promise<void> {
     return;
   }
 
-  const ranked = rows
-    .filter((r) => typeof r.sku === 'string' && r.sku.length > 0)
-    .sort((a, b) => toEpoch(b.last_updated) - toEpoch(a.last_updated));
+  // pricedb's priced feed is already newest-first. Keep only items inside the
+  // junk-flip capital band (pure-metal buy at/below WATCH_MAX_BUY_REF), then union
+  // with the hand-picked seed base and the currency SKUs.
+  const affordable = rows.filter(
+    (r): r is PriceRow & { sku: string } =>
+      typeof r.sku === 'string' &&
+      r.sku.length > 0 &&
+      r.buy != null &&
+      !r.buy.keys &&
+      typeof r.buy.metal === 'number' &&
+      r.buy.metal > 0 &&
+      r.buy.metal <= env.WATCH_MAX_BUY_REF,
+  );
 
-  const top = ranked.slice(0, TOP_N);
   const skuSet = new Set<string>(CURRENCY_FALLBACK);
   const names: Record<string, string> = {};
-  for (const r of top) {
-    skuSet.add(r.sku!);
-    if (r.name) names[r.sku!] = r.name;
+  for (const seed of getSeedWatchlist(1000)) skuSet.add(seed.skuKey);
+  for (const r of affordable.slice(0, TOP_N)) {
+    skuSet.add(r.sku);
+    if (r.name) names[r.sku] = r.name;
   }
   const skus = [...skuSet];
 
@@ -106,7 +111,10 @@ export async function refreshWatchList(): Promise<void> {
     logger.debug({ err: errMessage(e) }, '[watchlist] name cache update failed');
   }
 
-  logger.info({ count: skus.length, fromPricedb: top.length }, `[watchlist] loaded ${skus.length} SKUs from pricedb.io`);
+  logger.info(
+    { count: skus.length, affordable: affordable.length },
+    `[watchlist] loaded ${skus.length} SKUs (seed base + pricedb affordable)`,
+  );
 }
 
 export async function getSkuName(sku: string): Promise<string | null> {

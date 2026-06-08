@@ -15,7 +15,16 @@ module.exports = {
       // PAPER_LISTINGS=true → the bot collects the order book + prices but does
       // NOT post real bp.tf listings. Flip PAPER_LISTINGS to 'false' here (and
       // redeploy) only when you deliberately want live BUY listings.
-      env: { NODE_ENV: 'production', PAPER_TRADING: 'true', PAPER_LISTINGS: 'true' },
+      // WATCHLIST_MODE=auto builds the watch list from pricedb's priced feed,
+      // filtered to affordable items (pure-metal buy <= WATCH_MAX_BUY_REF ref) plus
+      // the seed base — so the bot tracks many cheap, liquid SKUs instead of one.
+      env: {
+        NODE_ENV: 'production',
+        PAPER_TRADING: 'true',
+        PAPER_LISTINGS: 'true',
+        WATCHLIST_MODE: 'auto',
+        WATCH_MAX_BUY_REF: '50',
+      },
       autorestart: true,
       max_restarts: 20,
       restart_delay: 5000,

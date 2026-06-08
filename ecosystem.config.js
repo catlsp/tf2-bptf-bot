@@ -41,6 +41,27 @@ module.exports = {
       time: true,
     },
     {
+      // Serves the built management panel (apps/web/dist) on loopback via Vite's
+      // static preview server. Reach it over the same SSH tunnel as the API; the
+      // browser is local, so the baked-in VITE_API_URL=localhost:3001 resolves
+      // through the tunnel. Build first: pnpm --filter @bptf/web build.
+      name: 'bptf-web',
+      cwd: './apps/web',
+      script: './node_modules/vite/bin/vite.js',
+      args: 'preview --host 127.0.0.1 --port 5173',
+      interpreter: 'node',
+      max_memory_restart: '150M',
+      env: { NODE_ENV: 'production' },
+      autorestart: true,
+      max_restarts: 20,
+      restart_delay: 5000,
+      exp_backoff_restart_delay: 2000,
+      out_file: '/var/log/bptf/web.out.log',
+      error_file: '/var/log/bptf/web.err.log',
+      merge_logs: true,
+      time: true,
+    },
+    {
       name: 'bptf-telegram',
       cwd: './apps/telegram',
       script: 'src/bot.ts',

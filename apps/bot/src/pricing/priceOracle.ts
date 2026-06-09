@@ -1,8 +1,10 @@
 import { env } from '../config/index.js';
 import { logger } from '../lib/logger.js';
-import { round2 } from '../lib/utils.js';
+import { round2, sleep } from '../lib/utils.js';
+import { errMessage } from '../lib/errors.js';
+import { redis } from '../integrations/redis.js';
 import { currentKeyRef } from '../integrations/bptf.js';
-import { fetchPricedbRows, type PricedbRow } from './pricedbFeed.js';
+import { fetchPricedbItem, type PricedbRow } from './pricedbFeed.js';
 
 // Authoritative reference price oracle, sourced from pricedb.io (the same source
 // the tf2autobot-pricedb fork uses in place of prices.tf). Every trade and
@@ -10,9 +12,23 @@ import { fetchPricedbRows, type PricedbRow } from './pricedbFeed.js';
 // order book can never produce a mispriced trade. The order book still decides
 // where to sit *within* the rails for competitiveness.
 //
+// Coverage: pricedb's bulk /api/prices is only the ~100 most-recently-priced
+// items (a rotating window), far too sparse to cover our watch set. So the oracle
+// fetches the authoritative per-SKU price (/api/item/{sku}) for exactly the SKUs
+// in the Redis watch set, throttled, once per refresh.
+//
 // Prices are denominated in refined: keys are folded in at the live key→ref rate
 // (currentKeyRef) at read time, so a moving key price stays consistent with the
-// rest of the bot.
+// rest of the bot. A price older than MAX_PRICE_AGE_SEC is treated as missing, so
+// genuinely abandoned prices expire while transient fetch blips keep last-good.
+
+// Mirrors the watch set key written by refreshWatchList / read by listingRefresh.
+const WATCHLIST_KEY = 'bptf:ob:watch';
+// Spacing between per-SKU requests — gentle on pricedb (≈8 req/s) and well under
+// any sane rate limit at ~60 SKUs/refresh.
+const FETCH_SPACING_MS = 120;
+// Ignore a reference price older than this (pricedb stamps each row's `time`).
+const MAX_PRICE_AGE_SEC = 14 * 24 * 60 * 60; // 14 days
 
 export interface RefPrice {
   skuKey: string;
@@ -66,27 +82,47 @@ function foldRef(keys: number, metal: number): number {
 }
 
 /**
- * Refresh the oracle from pricedb.io. Never clobbers a good cache on failure: an
- * empty/failed fetch keeps the previous prices in place.
+ * Refresh the oracle by pulling the authoritative per-SKU price for every SKU in
+ * the watch set. Accumulates into the existing cache: a successful fetch updates
+ * that SKU; a failed one keeps its last-good entry (so a transient blip doesn't
+ * strip coverage — genuinely stale prices expire via MAX_PRICE_AGE_SEC on read).
+ * Never wipes the cache when every fetch fails (full outage).
  */
 export async function refreshPriceOracle(): Promise<number> {
-  const rows = await fetchPricedbRows();
-  if (rows.length === 0) {
-    logger.warn({ cached: cache.size }, '[oracle] pricedb feed empty — keeping existing reference prices');
+  let skus: string[];
+  try {
+    skus = await redis.smembers(WATCHLIST_KEY);
+  } catch (e) {
+    logger.warn({ err: errMessage(e) }, '[oracle] could not read watch set — keeping existing reference prices');
     return cache.size;
   }
-  const next = new Map<string, RawRef>();
-  for (const row of rows) {
-    const raw = toRaw(row);
-    if (raw) next.set(raw.skuKey, raw);
+  if (skus.length === 0) {
+    logger.warn('[oracle] watch set empty — keeping existing reference prices');
+    return cache.size;
   }
-  if (next.size === 0) {
-    logger.warn('[oracle] pricedb feed had no usable rows — keeping existing reference prices');
+
+  const next = new Map(cache); // accumulate; refresh the watched SKUs in place
+  let priced = 0;
+  let unpriced = 0;
+  for (const sku of skus) {
+    const row = await fetchPricedbItem(sku);
+    const raw = row ? toRaw(row) : null;
+    if (raw) {
+      next.set(sku, raw);
+      priced++;
+    } else {
+      unpriced++;
+    }
+    await sleep(FETCH_SPACING_MS);
+  }
+
+  if (priced === 0) {
+    logger.warn({ attempted: skus.length }, '[oracle] no pricedb prices returned — keeping existing cache');
     return cache.size;
   }
   cache = next;
   lastRefreshAt = Date.now();
-  logger.info({ count: cache.size }, '[oracle] reference prices refreshed from pricedb.io');
+  logger.info({ priced, unpriced, total: skus.length }, '[oracle] reference prices refreshed (per-SKU)');
   return cache.size;
 }
 
@@ -98,6 +134,9 @@ export async function refreshPriceOracle(): Promise<number> {
 export function getRefPrice(skuKey: string): RefPrice | null {
   const raw = cache.get(skuKey);
   if (!raw) return null;
+  // Expire genuinely stale prices (pricedb stamps `time` in unix seconds). time
+  // === 0 means "unknown age" — keep it rather than wrongly expiring.
+  if (raw.time > 0 && Date.now() / 1000 - raw.time > MAX_PRICE_AGE_SEC) return null;
   return {
     skuKey: raw.skuKey,
     buyRef: foldRef(raw.buyKeys, raw.buyMetal),

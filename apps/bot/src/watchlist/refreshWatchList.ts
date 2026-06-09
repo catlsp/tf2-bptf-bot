@@ -70,13 +70,11 @@ export async function refreshWatchList(): Promise<void> {
     logger.warn({ err: errMessage(e) }, '[watchlist] failed to write watch-list.json, keeping in-memory only');
   }
 
-  // refresh Redis watch set + name cache
+  // refresh Redis watch set + name cache. Merge names (don't wipe) so the price
+  // oracle's per-SKU names — which cover SKUs the bulk feed doesn't — survive.
   await loadWatchList();
   try {
-    const pipe = redis.multi();
-    pipe.del(NAMES_KEY);
-    if (Object.keys(names).length > 0) pipe.hset(NAMES_KEY, names);
-    await pipe.exec();
+    if (Object.keys(names).length > 0) await redis.hset(NAMES_KEY, names);
   } catch (e) {
     logger.debug({ err: errMessage(e) }, '[watchlist] name cache update failed');
   }

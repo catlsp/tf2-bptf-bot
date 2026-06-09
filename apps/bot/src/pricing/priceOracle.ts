@@ -24,6 +24,9 @@ import { fetchPricedbItem, type PricedbRow } from './pricedbFeed.js';
 
 // Mirrors the watch set key written by refreshWatchList / read by listingRefresh.
 const WATCHLIST_KEY = 'bptf:ob:watch';
+// Item-name cache (read by getSkuName). bp.tf BUY listings need the item name to
+// resolve the item, so we populate it from each per-SKU pricedb response.
+const NAMES_KEY = 'bptf:ob:names';
 // Spacing between per-SKU requests — gentle on pricedb (≈8 req/s) and well under
 // any sane rate limit at ~60 SKUs/refresh.
 const FETCH_SPACING_MS = 120;
@@ -102,6 +105,7 @@ export async function refreshPriceOracle(): Promise<number> {
   }
 
   const next = new Map(cache); // accumulate; refresh the watched SKUs in place
+  const names: Record<string, string> = {};
   let priced = 0;
   let unpriced = 0;
   for (const sku of skus) {
@@ -109,6 +113,7 @@ export async function refreshPriceOracle(): Promise<number> {
     const raw = row ? toRaw(row) : null;
     if (raw) {
       next.set(sku, raw);
+      if (typeof row?.name === 'string' && row.name) names[sku] = row.name;
       priced++;
     } else {
       unpriced++;
@@ -122,7 +127,18 @@ export async function refreshPriceOracle(): Promise<number> {
   }
   cache = next;
   lastRefreshAt = Date.now();
-  logger.info({ priced, unpriced, total: skus.length }, '[oracle] reference prices refreshed (per-SKU)');
+
+  // Populate the item-name cache (merge, never wipe) so BUY listings can resolve
+  // item names for every priced SKU — without names bp.tf rejects the listing.
+  if (Object.keys(names).length > 0) {
+    try {
+      await redis.hset(NAMES_KEY, names);
+    } catch (e) {
+      logger.debug({ err: errMessage(e) }, '[oracle] name cache update failed');
+    }
+  }
+
+  logger.info({ priced, unpriced, named: Object.keys(names).length, total: skus.length }, '[oracle] reference prices refreshed (per-SKU)');
   return cache.size;
 }
 

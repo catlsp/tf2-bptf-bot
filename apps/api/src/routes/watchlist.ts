@@ -74,9 +74,20 @@ export const watchlistRoutes: FastifyPluginAsync = async (fastify) => {
       if (sku) heldBySku.set(sku, g._count._all);
     }
 
-    // 4. Merge: union of tracked SKUs and override SKUs.
+    // 4. Merge: every tracked SKU, plus override SKUs — but skip legacy seed rows
+    // (a default WatchlistEntry that isn't tracked and carries no real override),
+    // so the panel isn't cluttered with priceless "13;11"-style placeholders.
     const snapshotBySku = new Map(snapshots.map((s) => [s.skuKey, s]));
-    const allSkus = new Set<string>([...snapshotBySku.keys(), ...entryBySku.keys()]);
+    const isMeaningfulOverride = (e: (typeof entries)[number]): boolean =>
+      e.active === false ||
+      e.maxQty != null ||
+      e.minSellRef != null ||
+      (e.maxBuyRef != null && e.maxBuyRef < 9000) ||
+      (e.notes != null && e.notes !== '');
+    const allSkus = new Set<string>(snapshotBySku.keys());
+    for (const e of entries) {
+      if (snapshotBySku.has(e.skuKey) || isMeaningfulOverride(e)) allSkus.add(e.skuKey);
+    }
 
     const rows = [...allSkus].map((skuKey) => {
       const snap = snapshotBySku.get(skuKey) ?? null;

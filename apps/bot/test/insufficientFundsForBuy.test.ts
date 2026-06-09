@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
     WATCHLIST_MODE: 'manual',
     TF2VAULT_RESERVE_REFINED: 0,
     MAX_LISTINGS: 30,
+    MAX_POSITION_PER_SKU: 3,
     LISTING_PRICE_DRIFT_PCT: 2,
     LISTING_DETAILS_TEMPLATE: 'Bot offering {priceRef} ref',
     BPTF_LISTING_DELAY_MS: 0,
@@ -62,6 +63,15 @@ vi.mock('../src/events/publisher.js', () => ({ publish: h.publish, nowIso: () =>
 vi.mock('../src/watchlist/refreshWatchList.js', () => ({ getSkuName: h.getSkuName }));
 vi.mock('../src/orderbook/orderBook.js', () => ({ getOrderBook: h.getOrderBook }));
 vi.mock('../src/pricing/priceOracle.js', () => ({ getRefPrice: h.getRefPrice }));
+vi.mock('../src/watchlist/overrides.js', () => ({
+  loadOverrides: vi.fn().mockResolvedValue(0),
+  getOverride: vi.fn(() => null),
+  isSkuActive: () => true,
+  effectiveCap: (_o: unknown, g: number) => g,
+  effectiveRefBuy: (r: number) => r,
+  effectiveRefSell: (r: number) => r,
+}));
+vi.mock('../src/risk/limits.js', () => ({ openPositionForSku: vi.fn().mockResolvedValue(0) }));
 vi.mock('../src/lib/logger.js', () => ({ logger: { info: vi.fn(), warn: h.warn, error: vi.fn(), debug: vi.fn() } }));
 
 import { runOnce } from '../src/jobs/listingRefresh.js';

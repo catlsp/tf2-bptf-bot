@@ -33,6 +33,15 @@ import { publish, nowIso } from '../events/publisher.js';
 import { getSkuName } from '../watchlist/refreshWatchList.js';
 import { getOrderBook } from '../orderbook/orderBook.js';
 import { getRefPrice } from '../pricing/priceOracle.js';
+import {
+  loadOverrides,
+  getOverride,
+  isSkuActive,
+  effectiveCap,
+  effectiveRefBuy,
+  effectiveRefSell,
+} from '../watchlist/overrides.js';
+import { openPositionForSku } from '../risk/limits.js';
 
 // Phase 2: maintain our BUY listings on bp.tf.
 // - Runs every LISTING_REFRESH_INTERVAL_SEC.
@@ -90,11 +99,11 @@ function isCurrencySku(skuKey: string): boolean {
 // Listing descriptions carry the item name + price so the classified reads like
 // "Buying <item> for <price> ref" instead of an anonymous price. itemName may be
 // null when the pricedb name cache is cold — fall back to a neutral phrase.
-function buyDetails(itemName: string | null, displayedTotal: number): string {
-  return env.LISTING_DETAILS_TEMPLATE.replace('{itemName}', itemName ?? 'this item').replace(
-    '{priceRef}',
-    String(displayedTotal),
-  );
+function buyDetails(itemName: string | null, displayedTotal: number, held: number, cap: number): string {
+  return env.LISTING_DETAILS_TEMPLATE.replace('{itemName}', itemName ?? 'this item')
+    .replace('{priceRef}', String(displayedTotal))
+    .replace('{held}', String(held))
+    .replace('{cap}', String(cap));
 }
 
 function sellDetails(itemName: string | null, displayedTotal: number): string {
@@ -167,8 +176,9 @@ export async function runOnce(): Promise<void> {
       return;
     }
 
-    // 2. Refresh key price (ref↔keys conversion)
+    // 2. Refresh key price (ref↔keys conversion) + per-SKU overrides
     await refreshKeyPrice();
+    await loadOverrides();
 
     // 3. Reconcile DB ↔ bp.tf
     const remoteListings = await listMyListings();
@@ -218,6 +228,21 @@ export async function runOnce(): Promise<void> {
         continue;
       }
 
+      // Per-SKU control (Watchlist panel): pause + position cap apply to every
+      // strategy mode. held/cap also feed the listing description ("0/1").
+      const ovr = getOverride(skuKey);
+      if (!isSkuActive(ovr)) {
+        skipped++;
+        continue;
+      }
+      const cap = effectiveCap(ovr, env.MAX_POSITION_PER_SKU);
+      const held = await openPositionForSku(skuKey);
+      if (held >= cap) {
+        // already holding/listing the max we want of this SKU
+        skipped++;
+        continue;
+      }
+
       let desiredPriceRef: number | null;
       let fairValueRef: number;
       if (env.STRATEGY_MODE === 'market_making') {
@@ -229,7 +254,12 @@ export async function runOnce(): Promise<void> {
           continue;
         }
         const ob = await getOrderBook(skuKey);
-        desiredPriceRef = evaluateMarketMakingBuy(ob, { refBuyRef: ref.buyRef });
+        // Liquidity gate: only bid on a two-sided (actually-trading) book.
+        if (env.LISTING_REQUIRE_TWO_SIDED && (ob.buys.length === 0 || ob.sells.length === 0)) {
+          skipped++;
+          continue;
+        }
+        desiredPriceRef = evaluateMarketMakingBuy(ob, { refBuyRef: effectiveRefBuy(ref.buyRef, ovr) });
         fairValueRef = desiredPriceRef ?? 0;
         // Balance gate: only bid what we can actually fund. Not an error — the
         // natural state until a sale tops the wallet back up.
@@ -259,7 +289,7 @@ export async function runOnce(): Promise<void> {
           const { keys, metal } = refToKeysAndMetal(desiredPriceRef);
           const displayedTotal = round2(keys * currentKeyRef() + quantizeForDisplay(metal));
           const itemName = await getSkuName(skuKey);
-          const details = buyDetails(itemName, displayedTotal);
+          const details = buyDetails(itemName, displayedTotal, held, cap);
           try {
             if (existing.bptfListingId) {
               await updateListingPrice(existing.bptfListingId, keys, metal, details);
@@ -297,7 +327,7 @@ export async function runOnce(): Promise<void> {
       // displayed total folds keys back in via the current key price.
       const displayedTotal = round2(keys * currentKeyRef() + quantizeForDisplay(metal));
       const itemName = await getSkuName(skuKey);
-      const details = buyDetails(itemName, displayedTotal);
+      const details = buyDetails(itemName, displayedTotal, held, cap);
 
       // Persist 'creating' first so a hung API call doesn't lose the row.
       const dbRow = await prisma.ourListing.create({
@@ -437,12 +467,16 @@ async function refreshSellListings(): Promise<{ created: number; updated: number
     let priceFor: (item: OwnedItem) => number | null;
     let fairValueRef: number;
     if (env.STRATEGY_MODE === 'market_making') {
+      // Per-SKU pause from the panel applies to selling too.
+      const ovr = getOverride(skuKey);
+      if (!isSkuActive(ovr)) continue;
       // Hard-rails policy: no pricedb reference → don't list this SKU for sale.
       const ref = getRefPrice(skuKey);
       if (!ref) continue;
       const ob = await getOrderBook(skuKey);
       fairValueRef = ob.sells[0]?.priceRef ?? ob.buys[0]?.priceRef ?? 0;
-      priceFor = (item) => evaluateMarketMakingSell(ob, item.acquiredPriceRef, { refSellRef: ref.sellRef });
+      const refSellRef = effectiveRefSell(ref.sellRef, ovr);
+      priceFor = (item) => evaluateMarketMakingSell(ob, item.acquiredPriceRef, { refSellRef });
     } else {
       const market = await buildMarketSnapshot(skuKey, meta);
       if (!market) continue;

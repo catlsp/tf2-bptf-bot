@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
     MM_MIN_SPREAD_SCRAP: 1,
     WATCHLIST_MODE: 'manual',
     TF2VAULT_RESERVE_REFINED: 0,
+    MAX_POSITION_PER_SKU: 3,
   } as Record<string, unknown>,
   prisma: {
     ourListing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
@@ -60,6 +61,15 @@ vi.mock('../src/risk/emergencyStop.js', () => ({ isStopped: h.isStopped }));
 vi.mock('../src/events/publisher.js', () => ({ publish: h.publish, nowIso: () => 'now' }));
 vi.mock('../src/watchlist/refreshWatchList.js', () => ({ getSkuName: h.getSkuName }));
 vi.mock('../src/orderbook/orderBook.js', () => ({ getOrderBook: h.getOrderBook }));
+vi.mock('../src/watchlist/overrides.js', () => ({
+  loadOverrides: vi.fn().mockResolvedValue(0),
+  getOverride: vi.fn(() => null),
+  isSkuActive: () => true,
+  effectiveCap: (_o: unknown, g: number) => g,
+  effectiveRefBuy: (r: number) => r,
+  effectiveRefSell: (r: number) => r,
+}));
+vi.mock('../src/risk/limits.js', () => ({ openPositionForSku: vi.fn().mockResolvedValue(0) }));
 vi.mock('../src/lib/logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));

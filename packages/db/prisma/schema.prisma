@@ -128,6 +128,9 @@ model WatchlistEntry {
   skuKey    String  @unique
   maxBuyRef Float
   minSellRef Float?
+  // Per-SKU position cap (how many of this item the bot may hold/list at once).
+  // Null = fall back to the global MAX_POSITION_PER_SKU.
+  maxQty    Int?
   active    Boolean @default(true)
   priority  Int     @default(0)
   notes     String?

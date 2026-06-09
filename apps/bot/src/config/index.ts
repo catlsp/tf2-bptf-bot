@@ -95,12 +95,16 @@ const schema = z.object({
   LISTING_REFRESH_INTERVAL_SEC: numFromStr(1800, 10),
   MAX_LISTINGS: numFromStr(30, 1),
   LISTING_PRICE_DRIFT_PCT: numFromStr(2, 0),
-  // {itemName} and {priceRef} are substituted per listing so the description
-  // shows what we're buying and the price.
+  // {itemName}, {priceRef}, {held} and {cap} are substituted per listing so the
+  // description shows what we're buying, the price, and how full the position is
+  // (e.g. "Buying X for 5 ref (0/1)").
   LISTING_DETAILS_TEMPLATE: z
     .string()
-    .default('Buying {itemName} for {priceRef} ref. Send a trade offer or add me.'),
+    .default('Buying {itemName} for {priceRef} ref ({held}/{cap}). Send a trade offer or add me.'),
   BPTF_LISTING_DELAY_MS: numFromStr(1100, 0),
+  // Only post a BUY listing when the order book is two-sided (has both buy and
+  // sell depth) — a crude liquidity gate so we don't bid on dead/illiquid items.
+  LISTING_REQUIRE_TWO_SIDED: boolish(true),
 });
 
 export type Env = z.infer<typeof schema>;

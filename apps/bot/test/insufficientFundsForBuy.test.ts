@@ -41,6 +41,7 @@ const h = vi.hoisted(() => ({
   getSkuName: vi.fn(),
   getOrderBook: vi.fn(),
   safeLoadMetal: vi.fn(),
+  getRefPrice: vi.fn(),
 }));
 
 vi.mock('../src/config/index.js', () => ({ env: h.env, loadEnv: () => h.env }));
@@ -60,6 +61,7 @@ vi.mock('../src/risk/emergencyStop.js', () => ({ isStopped: h.isStopped }));
 vi.mock('../src/events/publisher.js', () => ({ publish: h.publish, nowIso: () => 'now' }));
 vi.mock('../src/watchlist/refreshWatchList.js', () => ({ getSkuName: h.getSkuName }));
 vi.mock('../src/orderbook/orderBook.js', () => ({ getOrderBook: h.getOrderBook }));
+vi.mock('../src/pricing/priceOracle.js', () => ({ getRefPrice: h.getRefPrice }));
 vi.mock('../src/lib/logger.js', () => ({ logger: { info: vi.fn(), warn: h.warn, error: vi.fn(), debug: vi.fn() } }));
 
 import { runOnce } from '../src/jobs/listingRefresh.js';
@@ -76,6 +78,9 @@ beforeEach(() => {
   h.prisma.listing.findMany.mockResolvedValue([]);
   h.redis.smembers.mockResolvedValue(['725;6']);
   h.getSkuName.mockResolvedValue('Tour of Duty Ticket');
+  // pricedb reference rails sit just outside the book, so they don't clamp the
+  // 24.11 bid — the funds gate is what's under test here.
+  h.getRefPrice.mockReturnValue({ skuKey: '725;6', buyRef: 26, sellRef: 27 });
   // The book wants ~24 ref to win the bid (highest 24 + 1 scrap = 24.11)...
   h.getOrderBook.mockResolvedValue({ buys: [{ priceRef: 24 }], sells: [{ priceRef: 26 }] });
   // ...but we only hold 12 ref of liquid metal.

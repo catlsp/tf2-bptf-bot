@@ -13,14 +13,28 @@ import { applyDiscount, applyMarkup, round2 } from '../lib/utils.js';
 const MIN_UNDERVALUE_PCT = 15; // candidate threshold from the spec
 const MIN_VIABLE_REF = 0.05; // ignore dust below the cheapest hat band
 
+/**
+ * pricedb.io reference rails. Hard bounds that no decision may cross: we never
+ * pay more than {@link refBuyRef} on a buy, nor sell below {@link refSellRef}.
+ * Either side may be null when pricedb has no price for that side.
+ */
+export interface RefBounds {
+  refBuyRef?: number | null;
+  refSellRef?: number | null;
+}
+
 export interface StrategyInput {
   skuKey: string;
   name: string;
   market: MarketSnapshot;
+  /** pricedb reference rails. When omitted, no clamping is applied. */
+  bounds?: RefBounds;
 }
 
 export function evaluate(input: StrategyInput): TradeDecision | null {
   const { market, name, skuKey } = input;
+  const refBuyRef = input.bounds?.refBuyRef ?? null;
+  const refSellRef = input.bounds?.refSellRef ?? null;
   const fv = market.fairValueRef;
   if (fv < MIN_VIABLE_REF) return null;
 
@@ -28,12 +42,15 @@ export function evaluate(input: StrategyInput): TradeDecision | null {
   if (market.lowestSellRef != null) {
     const undervaluePct = round2(((fv - market.lowestSellRef) / fv) * 100);
     if (undervaluePct >= MIN_UNDERVALUE_PCT) {
-      // We'd pay at or below our discounted target, capped at the listing price.
-      const targetBuy = Math.min(market.lowestSellRef, applyDiscount(fv, env.BUY_DISCOUNT_PCT));
+      // We'd pay at or below our discounted target, capped at the listing price
+      // and — the hard rail — never above the pricedb reference buy.
+      let targetBuy = Math.min(market.lowestSellRef, applyDiscount(fv, env.BUY_DISCOUNT_PCT));
+      if (refBuyRef != null) targetBuy = Math.min(targetBuy, refBuyRef);
+      targetBuy = round2(targetBuy);
       const projectedSell = Math.max(fv, applyMarkup(targetBuy, env.SELL_MARKUP_PCT));
       const expectedProfitRef = round2(projectedSell - targetBuy);
       const marginPct = round2((expectedProfitRef / targetBuy) * 100);
-      if (expectedProfitRef > 0) {
+      if (targetBuy > 0 && expectedProfitRef > 0) {
         return {
           skuKey,
           name,
@@ -51,7 +68,8 @@ export function evaluate(input: StrategyInput): TradeDecision | null {
 
   // --- SELL side: is there a buy order high enough to satisfy our markup? ---
   if (market.highestBuyRef != null) {
-    const minSell = Math.max(fv, applyMarkup(fv, env.SELL_MARKUP_PCT));
+    // Hard rail: never sell below the pricedb reference sell.
+    const minSell = Math.max(fv, applyMarkup(fv, env.SELL_MARKUP_PCT), refSellRef ?? 0);
     if (market.highestBuyRef >= minSell) {
       const expectedProfitRef = round2(market.highestBuyRef - fv);
       return {
@@ -173,13 +191,18 @@ export interface OrderBookView {
 
 /**
  * BUY price = highest existing bid + 1 scrap (so we sit just above the book),
- * capped by env.MM_MAX_BUY_REF when set. Returns null when there are no bids to
- * beat (nothing to anchor against).
+ * capped by env.MM_MAX_BUY_REF when set and — the hard rail — never above the
+ * pricedb reference buy ({@link bounds.refBuyRef}). Returns null when there are
+ * no bids to anchor against. Clamping the bid below the current best bid is fine
+ * (we simply refuse to overpay) — it just won't win until the book comes to us.
  */
-export function evaluateMarketMakingBuy(orderbook: OrderBookView): number | null {
+export function evaluateMarketMakingBuy(orderbook: OrderBookView, bounds: RefBounds = {}): number | null {
   const highest = orderbook.buys[0]?.priceRef;
   if (highest == null) return null;
   let price = round2(highest + SCRAP_INCREMENT);
+  if (bounds.refBuyRef != null && price > bounds.refBuyRef) {
+    price = round2(bounds.refBuyRef);
+  }
   if (env.MM_MAX_BUY_REF != null && price > env.MM_MAX_BUY_REF) {
     price = round2(env.MM_MAX_BUY_REF);
   }
@@ -189,15 +212,22 @@ export function evaluateMarketMakingBuy(orderbook: OrderBookView): number | null
 
 /**
  * SELL price = lowest existing ask − 1 scrap (undercut the floor), but never
- * below costBasis + MM_MIN_SPREAD_SCRAP scrap. Returns null when there are no
- * asks to undercut, or undercutting would dip below the minimum spread (selling
- * at a loss / no edge).
+ * below the floor = max(costBasis + MM_MIN_SPREAD_SCRAP scrap, pricedb reference
+ * sell). The pricedb sell ({@link bounds.refSellRef}) is the hard rail: we won't
+ * sell below it even to undercut. Returns null when there are no asks to
+ * undercut, or undercutting would dip below the floor (selling at a loss / below
+ * fair value / no edge).
  */
-export function evaluateMarketMakingSell(orderbook: OrderBookView, costBasis: number): number | null {
+export function evaluateMarketMakingSell(
+  orderbook: OrderBookView,
+  costBasis: number,
+  bounds: RefBounds = {},
+): number | null {
   const lowest = orderbook.sells[0]?.priceRef;
   if (lowest == null) return null;
   const undercut = round2(lowest - SCRAP_INCREMENT);
-  const floor = round2(costBasis + env.MM_MIN_SPREAD_SCRAP * SCRAP_INCREMENT);
+  let floor = round2(costBasis + env.MM_MIN_SPREAD_SCRAP * SCRAP_INCREMENT);
+  if (bounds.refSellRef != null) floor = Math.max(floor, bounds.refSellRef);
   if (undercut < floor) return null;
   return undercut;
 }

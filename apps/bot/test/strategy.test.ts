@@ -120,6 +120,17 @@ describe('evaluateMarketMakingBuy', () => {
     expect(r).toBe(70.0);
     h.env.MM_MAX_BUY_REF = undefined;
   });
+
+  it('hard rail: never bids above the pricedb reference buy', () => {
+    // book wants 70.66, but pricedb says the item is only worth 5 to buy → clamp to 5
+    const r = evaluateMarketMakingBuy({ buys: [{ priceRef: 70.55 }], sells: [] }, { refBuyRef: 5 });
+    expect(r).toBe(5);
+  });
+
+  it('leaves the bid untouched when it is already within the pricedb rail', () => {
+    const r = evaluateMarketMakingBuy({ buys: [{ priceRef: 4 }], sells: [] }, { refBuyRef: 5 });
+    expect(r).toBe(4.11);
+  });
 });
 
 describe('evaluateMarketMakingSell', () => {
@@ -135,5 +146,19 @@ describe('evaluateMarketMakingSell', () => {
   it('returns null when undercutting would dip below cost + min spread', () => {
     // lowest 71.00 → undercut 70.89; cost 71.00 + 1 scrap = 71.11 > 70.89 → null
     expect(evaluateMarketMakingSell({ buys: [], sells: [{ priceRef: 71.0 }] }, 71.0)).toBeNull();
+  });
+
+  it('hard rail: refuses to sell below the pricedb reference sell', () => {
+    // book undercut 72.00 is fine vs cost, but pricedb floor 73 forbids it → null
+    expect(
+      evaluateMarketMakingSell({ buys: [], sells: [{ priceRef: 72.11 }] }, 50, { refSellRef: 73 }),
+    ).toBeNull();
+  });
+
+  it('allows the undercut when it clears the pricedb reference sell', () => {
+    // undercut 72.00 >= floor max(cost+spread, refSell 70) → 72.00
+    expect(
+      evaluateMarketMakingSell({ buys: [], sells: [{ priceRef: 72.11 }] }, 50, { refSellRef: 70 }),
+    ).toBe(72.0);
   });
 });

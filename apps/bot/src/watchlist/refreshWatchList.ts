@@ -1,10 +1,10 @@
 import { writeFile } from 'node:fs/promises';
-import axios from 'axios';
 import { redis } from '../integrations/redis.js';
 import { env } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import { errMessage } from '../lib/errors.js';
 import { loadWatchList, WATCH_LIST_PATH } from '../orderbook/orderBook.js';
+import { fetchPricedbRows, type PricedbRow } from '../pricing/pricedbFeed.js';
 import { getSeedWatchlist } from './seed.js';
 
 // Builds the watch list dynamically from pricedb.io's priced feed, filtered to
@@ -14,31 +14,12 @@ import { getSeedWatchlist } from './seed.js';
 // refreshes the Redis watch set, and caches names. Never overwrites a good list
 // on failure.
 
-const PRICEDB_URL = 'https://pricedb.io/api/prices';
 const TOP_N = 300;
 const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const NAMES_KEY = 'bptf:ob:names';
 
 // Always tracked, even if not in the top 300 — needed for currency conversion.
 const CURRENCY_FALLBACK = ['5021;6', '5002;6', '5001;6', '5000;6'];
-
-interface PriceRow {
-  sku?: string;
-  name?: string;
-  buy?: { keys?: number; metal?: number };
-  sell?: { keys?: number; metal?: number };
-}
-
-function extractRows(data: unknown): PriceRow[] {
-  if (Array.isArray(data)) return data as PriceRow[];
-  if (data && typeof data === 'object') {
-    const obj = data as Record<string, unknown>;
-    for (const k of ['items', 'prices', 'data', 'results']) {
-      if (Array.isArray(obj[k])) return obj[k] as PriceRow[];
-    }
-  }
-  return [];
-}
 
 export async function refreshWatchList(): Promise<void> {
   // Manual mode pins the list to config/watch-list.json. Never fetch pricedb,
@@ -53,20 +34,9 @@ export async function refreshWatchList(): Promise<void> {
     return;
   }
 
-  let rows: PriceRow[];
-  try {
-    const resp = await axios.get(PRICEDB_URL, { timeout: 20_000, validateStatus: () => true });
-    if (resp.status !== 200) {
-      logger.warn({ status: resp.status }, '[watchlist] pricedb.io non-200, keeping existing list');
-      return;
-    }
-    rows = extractRows(resp.data);
-    if (rows.length === 0) {
-      logger.warn('[watchlist] pricedb.io returned no rows, keeping existing list');
-      return;
-    }
-  } catch (e) {
-    logger.warn({ err: errMessage(e) }, '[watchlist] pricedb.io fetch failed, keeping existing list');
+  const rows = await fetchPricedbRows();
+  if (rows.length === 0) {
+    logger.warn('[watchlist] pricedb.io returned no rows, keeping existing list');
     return;
   }
 
@@ -74,7 +44,7 @@ export async function refreshWatchList(): Promise<void> {
   // junk-flip capital band (pure-metal buy at/below WATCH_MAX_BUY_REF), then union
   // with the hand-picked seed base and the currency SKUs.
   const affordable = rows.filter(
-    (r): r is PriceRow & { sku: string } =>
+    (r): r is PricedbRow & { sku: string } =>
       typeof r.sku === 'string' &&
       r.sku.length > 0 &&
       r.buy != null &&

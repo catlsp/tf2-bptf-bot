@@ -32,6 +32,7 @@ import { errMessage } from '../lib/errors.js';
 import { publish, nowIso } from '../events/publisher.js';
 import { getSkuName } from '../watchlist/refreshWatchList.js';
 import { getOrderBook } from '../orderbook/orderBook.js';
+import { getRefPrice } from '../pricing/priceOracle.js';
 
 // Phase 2: maintain our BUY listings on bp.tf.
 // - Runs every LISTING_REFRESH_INTERVAL_SEC.
@@ -220,8 +221,15 @@ export async function runOnce(): Promise<void> {
       let desiredPriceRef: number | null;
       let fairValueRef: number;
       if (env.STRATEGY_MODE === 'market_making') {
+        // Hard-rails policy: no pricedb reference price → no BUY listing (we have
+        // no sane ceiling to clamp the bid to).
+        const ref = getRefPrice(skuKey);
+        if (!ref) {
+          skipped++;
+          continue;
+        }
         const ob = await getOrderBook(skuKey);
-        desiredPriceRef = evaluateMarketMakingBuy(ob);
+        desiredPriceRef = evaluateMarketMakingBuy(ob, { refBuyRef: ref.buyRef });
         fairValueRef = desiredPriceRef ?? 0;
         // Balance gate: only bid what we can actually fund. Not an error — the
         // natural state until a sale tops the wallet back up.
@@ -429,9 +437,12 @@ async function refreshSellListings(): Promise<{ created: number; updated: number
     let priceFor: (item: OwnedItem) => number | null;
     let fairValueRef: number;
     if (env.STRATEGY_MODE === 'market_making') {
+      // Hard-rails policy: no pricedb reference → don't list this SKU for sale.
+      const ref = getRefPrice(skuKey);
+      if (!ref) continue;
       const ob = await getOrderBook(skuKey);
       fairValueRef = ob.sells[0]?.priceRef ?? ob.buys[0]?.priceRef ?? 0;
-      priceFor = (item) => evaluateMarketMakingSell(ob, item.acquiredPriceRef);
+      priceFor = (item) => evaluateMarketMakingSell(ob, item.acquiredPriceRef, { refSellRef: ref.sellRef });
     } else {
       const market = await buildMarketSnapshot(skuKey, meta);
       if (!market) continue;

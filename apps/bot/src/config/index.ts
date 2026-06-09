@@ -64,6 +64,9 @@ const schema = z.object({
     .refine((n) => n === undefined || Number.isFinite(n), 'must be a number'),
   // Minimum spread over cost basis a SELL must keep, in scrap (1 scrap = 0.11 ref).
   MM_MIN_SPREAD_SCRAP: numFromStr(1, 0),
+  // How often to refresh the pricedb.io reference-price oracle (seconds). These
+  // prices are the hard buy/sell rails every trade and listing is clamped to.
+  PRICEDB_REFRESH_SEC: numFromStr(1800, 60),
   // 'manual' pins the watch-list to config/watch-list.json (no pricedb auto-refresh).
   // 'auto' builds it from pricedb's priced feed, filtered to affordable items.
   WATCHLIST_MODE: z.enum(['manual', 'auto']).default('manual'),

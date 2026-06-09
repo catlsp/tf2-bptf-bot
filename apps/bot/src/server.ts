@@ -13,6 +13,7 @@ import { startListingRefresh, stopListingRefresh } from './jobs/listingRefresh.j
 import { startListingReconcile, stopListingReconcile } from './jobs/listingReconcile.js';
 import { initOrderBook, loadWatchList } from './orderbook/orderBook.js';
 import { startWatchListScheduler, stopWatchListScheduler } from './watchlist/refreshWatchList.js';
+import { startPriceOracle, stopPriceOracle } from './pricing/priceOracle.js';
 import * as bptfWs from './ws/bptfWs.js';
 
 // Sole entry point. Boots infra, logs in to Steam, then starts the periodic
@@ -41,6 +42,7 @@ async function main(): Promise<void> {
     logger.warn({ err: errMessage(e) }, '[watchlist] initial load failed; scheduler will retry');
   }
   startWatchListScheduler(); // refresh from pricedb.io now + every 24h
+  startPriceOracle(); // pricedb.io reference prices — the hard rails for all pricing
   bptfWs.start(); // connect to wss://ws.backpack.tf/events
 
   // Steam login → confirm Steam Guard → idle. Paper mode never sends offers, but
@@ -71,6 +73,7 @@ async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'shutting down');
   bptfWs.stop();
   stopWatchListScheduler();
+  stopPriceOracle();
   stopListingRefresh();
   stopListingReconcile();
   stopScanner();

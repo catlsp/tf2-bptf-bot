@@ -4,6 +4,7 @@ import { errMessage } from '../lib/errors.js';
 import { getActiveWatchlist } from '../watchlist/manager.js';
 import { getMarketSnapshot } from '../pricing/fairValue.js';
 import { evaluate } from '../pricing/strategy.js';
+import { getRefPrice } from '../pricing/priceOracle.js';
 import { handleBuyDecision } from '../trading/buyer.js';
 import { handleSellDecision } from '../trading/seller.js';
 import { refreshKeyPrice } from '../integrations/bptf.js';
@@ -49,11 +50,20 @@ async function scanOnce(): Promise<void> {
 
     for (const sku of watchlist) {
       try {
-        const { fair, market } = await getMarketSnapshot(sku);
+        const { fair, market, hasRef } = await getMarketSnapshot(sku);
         // Persist a price snapshot for every scanned SKU with market data. This
         // self-guards against DB errors, so it never breaks the scan loop.
         await recordPriceSnapshot(sku, fair);
-        const decision = evaluate({ skuKey: sku.skuKey, name: sku.name, market });
+        // Hard-rails policy: without a pricedb reference price we have no sane
+        // bounds, so we never trade this SKU (we still recorded its snapshot).
+        if (!hasRef) continue;
+        const ref = getRefPrice(sku.skuKey);
+        const decision = evaluate({
+          skuKey: sku.skuKey,
+          name: sku.name,
+          market,
+          bounds: { refBuyRef: ref?.buyRef ?? null, refSellRef: ref?.sellRef ?? null },
+        });
         if (process.env.SCANNER_VERBOSE === '1') {
           logger.info({ skuKey: sku.skuKey, market, decision }, 'scanner.cycle.decision');
         }

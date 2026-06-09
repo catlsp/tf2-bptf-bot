@@ -15,6 +15,7 @@ import type {
   OurListing,
   Paginated,
   PriceSnapshot,
+  SteamInventory,
   Trade,
   TradeStatus,
   UpsertWatchlistInput,
@@ -32,6 +33,7 @@ export const queryKeys = {
   trades: (params: TradesParams) => ['trades', params] as const,
   prices: (skuKey: string, days: number) => ['prices', skuKey, days] as const,
   market: ['market'] as const,
+  steamInventory: ['steamInventory'] as const,
 };
 
 export interface OrdersParams {
@@ -161,5 +163,13 @@ export function useMarket(): UseQueryResult<MarketItem[]> {
     queryKey: queryKeys.market,
     queryFn: ({ signal }) => api.market(signal),
     refetchInterval: 30_000,
+  });
+}
+
+export function useSteamInventory(): UseQueryResult<SteamInventory | null> {
+  return useQuery({
+    queryKey: queryKeys.steamInventory,
+    queryFn: ({ signal }) => api.steamInventory(signal),
+    refetchInterval: 60_000,
   });
 }

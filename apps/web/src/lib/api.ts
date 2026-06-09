@@ -7,6 +7,7 @@ import type {
   OurListing,
   Paginated,
   PriceSnapshot,
+  SteamInventory,
   Trade,
   TradeStatus,
   UpsertWatchlistInput,
@@ -111,4 +112,7 @@ export const api = {
     request(`/api/prices/${encodeURIComponent(skuKey)}${query({ days })}`, { signal }),
 
   market: (signal?: AbortSignal): Promise<MarketItem[]> => request('/api/market', { signal }),
+
+  steamInventory: (signal?: AbortSignal): Promise<SteamInventory | null> =>
+    request('/api/steam-inventory', { signal }),
 };

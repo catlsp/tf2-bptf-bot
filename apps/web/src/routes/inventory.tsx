@@ -1,16 +1,67 @@
 import { useState } from 'react';
-import { Boxes } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
+import { Boxes, Coins } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { StatusBadge } from '@/components/status-badge';
 import { EmptyState, ErrorState, TableSkeleton } from '@/components/states';
-import { useInventory } from '@/lib/queries';
+import { useInventory, useSteamInventory } from '@/lib/queries';
 import { formatRef, timeAgo, formatTimestamp } from '@/lib/utils';
 import type { InventoryStatus } from '@/lib/types';
 
 const TABS = ['all', 'HELD', 'LISTED', 'RESERVED', 'SOLD'] as const;
 type Tab = (typeof TABS)[number];
+
+function SteamInventoryCard(): React.JSX.Element | null {
+  const query = useSteamInventory();
+  const inv = query.data;
+  if (!inv) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Coins className="size-4" />
+          Live Steam inventory
+          <span className="ml-auto text-xs font-normal text-muted-foreground" title={formatTimestamp(inv.at)}>
+            {timeAgo(inv.at)}
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap gap-4 text-sm">
+          <span className="tabular-nums">
+            <span className="font-medium">{inv.balance.keys}</span>{' '}
+            <span className="text-muted-foreground">keys</span>
+          </span>
+          <span className="tabular-nums">
+            <span className="font-medium">{formatRef(inv.balance.refinedTotal)}</span>{' '}
+            <span className="text-muted-foreground">ref</span>
+          </span>
+          <span className="tabular-nums text-muted-foreground">
+            {inv.balance.refined}r · {inv.balance.reclaimed}rec · {inv.balance.scrap}scrap
+          </span>
+          <span className="ml-auto text-muted-foreground">{inv.itemCount} items</span>
+        </div>
+        {inv.items.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {inv.items.map((item) => (
+              <span
+                key={item.assetId}
+                className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                title={item.assetId}
+              >
+                {item.name}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">No non-currency items in the account right now.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export function InventoryPage(): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('all');
@@ -19,7 +70,9 @@ export function InventoryPage(): React.JSX.Element {
   const items = query.data ?? [];
 
   return (
-    <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)}>
+    <div className="space-y-4">
+      <SteamInventoryCard />
+      <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)}>
       <TabsList>
         {TABS.map((option) => (
           <TabsTrigger key={option} value={option}>
@@ -77,6 +130,7 @@ export function InventoryPage(): React.JSX.Element {
           </CardContent>
         </Card>
       </TabsContent>
-    </Tabs>
+      </Tabs>
+    </div>
   );
 }

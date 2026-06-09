@@ -129,6 +129,19 @@ export interface MarketItem {
   capturedAt: string;
 }
 
+export interface SteamInventory {
+  at: string;
+  balance: {
+    keys: number;
+    refined: number;
+    reclaimed: number;
+    scrap: number;
+    refinedTotal: number;
+  };
+  itemCount: number;
+  items: Array<{ assetId: string; name: string }>;
+}
+
 export interface DashboardStats {
   activeOurListings: number;
   watchlistSize: number;

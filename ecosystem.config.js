@@ -10,20 +10,21 @@ module.exports = {
       interpreter: 'node',
       node_args: '--import tsx --max-old-space-size=240',
       max_memory_restart: '270M',
-      // Paper flags are pinned here (not left to the pm2 daemon env) so they're
-      // explicit and version-controlled. PAPER_TRADING=true → no Steam offers.
-      // PAPER_LISTINGS=true → the bot collects the order book + prices but does
-      // NOT post real bp.tf listings. Flip PAPER_LISTINGS to 'false' here (and
-      // redeploy) only when you deliberately want live BUY listings.
-      // WATCHLIST_MODE=auto builds the watch list from pricedb's priced feed,
-      // filtered to affordable items (pure-metal buy <= WATCH_MAX_BUY_REF ref) plus
-      // the seed base — so the bot tracks many cheap, liquid SKUs instead of one.
+      // LIVE (limited) since 2026-06-09. Flags pinned here (version-controlled).
+      //   PAPER_TRADING=false  → the bot accepts matching offers on Steam and
+      //                          mobile-confirms them (identity secret).
+      //   PAPER_LISTINGS=false → the bot posts real BUY listings on bp.tf.
+      // Conservative caps for the live trial: only cheap/liquid items
+      // (WATCH_MAX_BUY_REF), at most 1 of each SKU, <=10 trades/day. To go back to
+      // simulation, flip both PAPER_* to 'true' and redeploy.
       env: {
         NODE_ENV: 'production',
-        PAPER_TRADING: 'true',
-        PAPER_LISTINGS: 'true',
+        PAPER_TRADING: 'false',
+        PAPER_LISTINGS: 'false',
         WATCHLIST_MODE: 'auto',
-        WATCH_MAX_BUY_REF: '50',
+        WATCH_MAX_BUY_REF: '10',
+        MAX_POSITION_PER_SKU: '1',
+        MAX_DAILY_TRADES: '10',
       },
       autorestart: true,
       max_restarts: 20,

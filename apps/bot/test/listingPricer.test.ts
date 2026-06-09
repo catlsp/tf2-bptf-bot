@@ -12,20 +12,22 @@ vi.mock('../src/integrations/bptf.js', () => ({ currentKeyRef: h.currentKeyRef }
 
 import { quantizeForDisplay } from '../src/pricing/listingPricer.js';
 
-describe('quantizeForDisplay (mirrors bp.tf scrap-grid rendering)', () => {
-  // bp.tf floors any sub-scrap remainder: 2.30 ref = 2 ref + 2.7 scrap → 2.22.
-  it('2.30 → 2.22', () => expect(quantizeForDisplay(2.3)).toBe(2.22));
+describe('quantizeForDisplay (snaps to bp.tf scrap grid, with carry)', () => {
+  // The bug this fixes: a pricedb grid value like 1.88 (1 ref + 8 scrap) must
+  // round-trip to 1.88, not collapse to 1.77 — round(1.88×9)=17 scrap → 1.88.
+  it('1.88 → 1.88 (8 scrap, recovered not floored)', () => expect(quantizeForDisplay(1.88)).toBe(1.88));
 
-  // Values already exactly on the grid are unchanged.
+  // 2.30 ref → round(20.7)=21 scrap → 2 ref + 3 scrap → 2.33 (nearest grid point).
+  it('2.30 → 2.33', () => expect(quantizeForDisplay(2.3)).toBe(2.33));
+
+  // Values already on the grid are unchanged; 9th scrap carries into a refined.
   it('3.0  → 3.0', () => expect(quantizeForDisplay(3.0)).toBe(3.0));
-  // NOTE: the spec sketch said 8.0 → 7.94, but 8.0 is an exact grid point
-  // (0 sub-scrap remainder) so bp.tf renders it unchanged. The 7.94 figure was a
-  // typo in the brief; the floor formula is what matches real bp.tf output.
   it('8.0  → 8.0', () => expect(quantizeForDisplay(8.0)).toBe(8.0));
+  it('1.0  → 1.0 (9 scrap carries to 1 ref)', () => expect(quantizeForDisplay(1.0)).toBe(1.0));
 
   it('0    → 0', () => expect(quantizeForDisplay(0)).toBe(0));
   it('negative → 0', () => expect(quantizeForDisplay(-1)).toBe(0));
 
-  // A sent metal of 2.75 (6.75 scrap) floors to 6 whole scrap → 2.66.
-  it('2.75 → 2.66', () => expect(quantizeForDisplay(2.75)).toBe(2.66));
+  // 2.75 ref → round(24.75)=25 scrap → 2 ref + 7 scrap → 2.77.
+  it('2.75 → 2.77', () => expect(quantizeForDisplay(2.75)).toBe(2.77));
 });

@@ -224,12 +224,12 @@ describe('listingRefresh — Phase 2 BUY maker', () => {
     expect(h.createListing).not.toHaveBeenCalled();
   });
 
-  it('12. refToKeysAndMetal(70) with key=63 → keys 1, metal floored to scrap (6.93)', () => {
+  it('12. refToKeysAndMetal(70) with key=63 → keys 1, metal 7.0 (63 scrap = 7 ref exactly)', () => {
     h.currentKeyRef.mockReturnValue(63);
     const r = refToKeysAndMetal(70);
     expect(r.keys).toBe(1);
-    // spec example said 7.04, but roundToScrap floors ("never overpay"): 7/0.11 -> 63 scrap -> 6.93
-    expect(r.metal).toBe(6.93);
+    // 70 − 1 key (63) = 7 ref = 63 scrap → 7 ref + 0 scrap → 7.0 (carry, not 6.93)
+    expect(r.metal).toBe(7.0);
   });
 
   it('13. createListing returns skipped → DB row failed, not pending', async () => {

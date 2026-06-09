@@ -5,24 +5,21 @@ import { currentKeyRef } from '../integrations/bptf.js';
 // Pure pricing helpers for Phase 2 BUY listings. No I/O except reading the
 // cached key price.
 
+// TF2 metal: 1 refined = 9 scrap. bp.tf renders metal as `ref.scrap`, where the
+// two decimals encode 0..8 scrap (scrap × 0.11) and every 9th scrap CARRIES into
+// a refined. So 17 scrap is 1 ref + 8 scrap = 1.88, not 17 × 0.11 = 1.87.
+const SCRAP_PER_REF = 9;
+
 /**
  * Convert a refined-denominated price into the (keys, metal) shape bp.tf expects.
- * Metal is in 0.11 increments (1 scrap = 0.11 ref); we round DOWN so we never
- * overpay on a buy order.
+ * Metal is snapped to bp.tf's scrap grid via {@link quantizeForDisplay} so the
+ * value we POST is exactly what bp.tf renders — no card/description drift.
  */
 export function refToKeysAndMetal(priceRef: number): { keys: number; metal: number } {
   const keyRef = currentKeyRef();
-  if (keyRef <= 0) {
-    return { keys: 0, metal: roundToScrap(priceRef) };
-  }
-  const keys = Math.floor(priceRef / keyRef);
+  const keys = keyRef > 0 ? Math.floor(priceRef / keyRef) : 0;
   const metalRaw = priceRef - keys * keyRef;
-  return { keys, metal: roundToScrap(metalRaw) };
-}
-
-function roundToScrap(metalRef: number): number {
-  const scrapCount = Math.floor(metalRef / 0.11 + 1e-9);
-  return round2(scrapCount * 0.11);
+  return { keys, metal: quantizeForDisplay(metalRaw) };
 }
 
 /**
@@ -38,18 +35,20 @@ export function computeBuyPrice(fairValueRef: number | null): number | null {
 }
 
 /**
- * Mirror bp.tf's scrap-grid rendering. bp.tf shows metal in the TF2 notation
- * `ref.scrap` where the decimals encode whole scrap (1 scrap = 0.11, 9 scrap =
- * 1 ref) and any sub-scrap remainder is floored — e.g. a sent metal of 2.30 is
- * 2 ref + 2.7 scrap, which renders as 2.22 (2 ref + 2 scrap). We floor to match
- * exactly what a trader sees on the listing card, so the description text never
- * disagrees with the price card.
+ * Snap a refined amount onto bp.tf's scrap grid and render it in `ref.scrap`
+ * notation. Rounds to the NEAREST whole scrap (recovers grid values like 1.88,
+ * whose 8 scrap = 0.888… reads back as 0.88 → 8 scrap, not 7), then carries every
+ * 9th scrap into a refined. This is the single source of truth for both the metal
+ * we POST and the price shown in the description, so they can never disagree:
+ *   1.88 ref → round(16.92)=17 scrap → 1 ref + 8 scrap → 1.88
+ *   7.00 ref → 63 scrap            → 7 ref + 0 scrap → 7.00
  */
 export function quantizeForDisplay(metalRef: number): number {
   if (metalRef <= 0) return 0;
-  const refPart = Math.floor(metalRef + 1e-9);
-  const scrap = Math.floor((metalRef - refPart) * 9 + 1e-9); // 0..8 whole scrap
-  return round2(refPart + scrap * 0.11);
+  const totalScrap = Math.round(metalRef * SCRAP_PER_REF);
+  const ref = Math.floor(totalScrap / SCRAP_PER_REF);
+  const scrap = totalScrap % SCRAP_PER_REF;
+  return round2(ref + scrap * 0.11);
 }
 
 /** True when two prices differ by more than LISTING_PRICE_DRIFT_PCT. */

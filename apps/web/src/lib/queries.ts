@@ -7,7 +7,6 @@ import {
 } from '@tanstack/react-query';
 import { api } from './api';
 import type {
-  CreateWatchlistInput,
   DashboardStats,
   EventLog,
   InventoryItem,
@@ -18,8 +17,9 @@ import type {
   PriceSnapshot,
   Trade,
   TradeStatus,
-  UpdateWatchlistInput,
+  UpsertWatchlistInput,
   WatchlistEntry,
+  WatchlistRow,
 } from './types';
 
 export const queryKeys = {
@@ -84,35 +84,21 @@ export function useDeleteOrder(): UseMutationResult<OurListing, Error, string> {
   });
 }
 
-export function useWatchlist(): UseQueryResult<WatchlistEntry[]> {
+export function useWatchlist(): UseQueryResult<WatchlistRow[]> {
   return useQuery({
     queryKey: queryKeys.watchlist,
     queryFn: ({ signal }) => api.watchlist(signal),
+    refetchInterval: 30_000,
   });
 }
 
-export function useCreateWatchlist(): UseMutationResult<WatchlistEntry, Error, CreateWatchlistInput> {
+export function useUpsertWatchlist(): UseMutationResult<WatchlistEntry, Error, UpsertWatchlistInput> {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (input: CreateWatchlistInput) => api.createWatchlist(input),
+    mutationFn: (input: UpsertWatchlistInput) => api.upsertWatchlist(input),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.watchlist });
       void client.invalidateQueries({ queryKey: queryKeys.dashboard });
-    },
-  });
-}
-
-export function useUpdateWatchlist(): UseMutationResult<
-  WatchlistEntry,
-  Error,
-  { id: string; input: UpdateWatchlistInput }
-> {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, input }: { id: string; input: UpdateWatchlistInput }) =>
-      api.updateWatchlist(id, input),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: queryKeys.watchlist });
     },
   });
 }

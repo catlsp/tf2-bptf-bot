@@ -84,8 +84,27 @@ export const watchlistEntrySchema = z.object({
   skuKey: z.string(),
   maxBuyRef: z.number(),
   minSellRef: z.number().nullable(),
+  maxQty: z.number().int().nullable(),
   active: z.boolean(),
   priority: z.number().int(),
+  notes: z.string().nullable(),
+});
+
+// Merged "control panel" row: a tracked SKU (name + live pricedb price + how many
+// we hold) joined with its optional WatchlistEntry override. entryId is null when
+// no override exists yet (the SKU runs on defaults: active, global caps).
+export const watchlistRowSchema = z.object({
+  skuKey: z.string(),
+  name: z.string().nullable(),
+  refBuyRef: z.number().nullable(),
+  refSellRef: z.number().nullable(),
+  source: z.string().nullable(),
+  held: z.number().int(),
+  entryId: z.string().nullable(),
+  active: z.boolean(),
+  maxBuyRef: z.number().nullable(),
+  minSellRef: z.number().nullable(),
+  maxQty: z.number().int().nullable(),
   notes: z.string().nullable(),
 });
 

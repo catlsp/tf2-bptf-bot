@@ -49,8 +49,27 @@ export interface WatchlistEntry {
   skuKey: string;
   maxBuyRef: number;
   minSellRef: number | null;
+  maxQty: number | null;
   active: boolean;
   priority: number;
+  notes: string | null;
+}
+
+// Merged control-panel row: a tracked SKU (live pricedb price + how many we hold)
+// joined with its optional per-SKU override. entryId is null until an override
+// exists; such a SKU runs on defaults (active, global caps).
+export interface WatchlistRow {
+  skuKey: string;
+  name: string | null;
+  refBuyRef: number | null;
+  refSellRef: number | null;
+  source: string | null;
+  held: number;
+  entryId: string | null;
+  active: boolean;
+  maxBuyRef: number | null;
+  minSellRef: number | null;
+  maxQty: number | null;
   notes: string | null;
 }
 
@@ -123,19 +142,13 @@ export interface Paginated<T> {
   total: number;
 }
 
-// Input payloads for mutations.
-export interface CreateWatchlistInput {
+// Input payloads for mutations. Upsert is keyed by skuKey: only the provided
+// fields change, so toggling `active` leaves the price/qty caps untouched.
+export interface UpsertWatchlistInput {
   skuKey: string;
-  maxBuyRef: number;
-  minSellRef?: number | null;
-  priority?: number;
-  notes?: string | null;
-}
-
-export interface UpdateWatchlistInput {
   maxBuyRef?: number;
   minSellRef?: number | null;
+  maxQty?: number | null;
   active?: boolean;
-  priority?: number;
   notes?: string | null;
 }

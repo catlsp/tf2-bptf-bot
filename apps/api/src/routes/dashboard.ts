@@ -39,7 +39,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
 
     const [activeOurListings, watchlistSize, recentErrors, totalEventLogToday, lastScan] = await Promise.all([
       prisma.ourListing.count({ where: { status: 'active' } }),
-      prisma.watchlistEntry.count(),
+      // Tracked SKUs = items the bot has priced at least once (the live watch set),
+      // not the per-SKU override table.
+      prisma.item.count({ where: { prices: { some: {} } } }),
       prisma.eventLog.count({ where: { level: 'error', createdAt: { gte: dayAgo } } }),
       prisma.eventLog.count({ where: { createdAt: { gte: startOfToday } } }),
       prisma.eventLog.findFirst({ where: { type: 'scan.completed' }, orderBy: { createdAt: 'desc' } }),

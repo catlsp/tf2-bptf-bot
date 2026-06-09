@@ -1,5 +1,4 @@
 import type {
-  CreateWatchlistInput,
   DashboardStats,
   EventLog,
   InventoryItem,
@@ -10,8 +9,9 @@ import type {
   PriceSnapshot,
   Trade,
   TradeStatus,
-  UpdateWatchlistInput,
+  UpsertWatchlistInput,
   WatchlistEntry,
+  WatchlistRow,
 } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_URL;
@@ -27,7 +27,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
 }
@@ -83,14 +83,11 @@ export const api = {
   deleteOrder: (id: string): Promise<OurListing> =>
     request(`/api/orders/${id}`, { method: 'DELETE' }),
 
-  watchlist: (signal?: AbortSignal): Promise<WatchlistEntry[]> =>
+  watchlist: (signal?: AbortSignal): Promise<WatchlistRow[]> =>
     request('/api/watchlist', { signal }),
 
-  createWatchlist: (input: CreateWatchlistInput): Promise<WatchlistEntry> =>
-    request('/api/watchlist', { method: 'POST', body: input }),
-
-  updateWatchlist: (id: string, input: UpdateWatchlistInput): Promise<WatchlistEntry> =>
-    request(`/api/watchlist/${id}`, { method: 'PATCH', body: input }),
+  upsertWatchlist: (input: UpsertWatchlistInput): Promise<WatchlistEntry> =>
+    request('/api/watchlist', { method: 'PUT', body: input }),
 
   deleteWatchlist: (id: string): Promise<void> =>
     request(`/api/watchlist/${id}`, { method: 'DELETE' }),

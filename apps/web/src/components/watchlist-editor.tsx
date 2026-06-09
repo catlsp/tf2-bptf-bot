@@ -12,124 +12,112 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useCreateWatchlist, useUpdateWatchlist } from '@/lib/queries';
-import { ApiError } from '@/lib/api';
-import type { CreateWatchlistInput, UpdateWatchlistInput, WatchlistEntry } from '@/lib/types';
+import { useUpsertWatchlist } from '@/lib/queries';
+import type { UpsertWatchlistInput, WatchlistRow } from '@/lib/types';
 
 interface FormState {
   skuKey: string;
   maxBuyRef: string;
   minSellRef: string;
-  priority: string;
+  maxQty: string;
   notes: string;
 }
 
-function toForm(entry?: WatchlistEntry): FormState {
+function toForm(row?: WatchlistRow): FormState {
   return {
-    skuKey: entry?.skuKey ?? '',
-    maxBuyRef: entry ? String(entry.maxBuyRef) : '',
-    minSellRef: entry?.minSellRef != null ? String(entry.minSellRef) : '',
-    priority: entry ? String(entry.priority) : '0',
-    notes: entry?.notes ?? '',
+    skuKey: row?.skuKey ?? '',
+    maxBuyRef: row?.maxBuyRef != null ? String(row.maxBuyRef) : '',
+    minSellRef: row?.minSellRef != null ? String(row.minSellRef) : '',
+    maxQty: row?.maxQty != null ? String(row.maxQty) : '',
+    notes: row?.notes ?? '',
   };
 }
 
 export function WatchlistEditor({
   open,
   onOpenChange,
-  entry,
+  row,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  entry?: WatchlistEntry;
+  row?: WatchlistRow;
 }): React.JSX.Element {
-  const isEdit = entry !== undefined;
-  const [form, setForm] = useState<FormState>(() => toForm(entry));
+  const isEdit = row !== undefined;
+  const [form, setForm] = useState<FormState>(() => toForm(row));
   const [error, setError] = useState<string | null>(null);
 
-  const create = useCreateWatchlist();
-  const update = useUpdateWatchlist();
-  const pending = create.isPending || update.isPending;
+  const upsert = useUpsertWatchlist();
 
-  // Reset the form whenever the dialog opens for a (possibly different) entry.
   useEffect(() => {
     if (open) {
-      setForm(toForm(entry));
+      setForm(toForm(row));
       setError(null);
     }
-  }, [open, entry]);
+  }, [open, row]);
 
   const set = (key: keyof FormState, value: string): void =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
-  const parseRef = (raw: string): number | null => {
+  const parsePositive = (raw: string): number | null => {
     const value = Number(raw);
     return raw.trim() !== '' && Number.isFinite(value) && value > 0 ? value : null;
   };
 
   const handleSubmit = (): void => {
     setError(null);
-    const maxBuyRef = parseRef(form.maxBuyRef);
-    if (!isEdit && form.skuKey.trim() === '') {
+    const skuKey = form.skuKey.trim();
+    if (skuKey === '') {
       setError('SKU key is required.');
       return;
     }
-    if (maxBuyRef === null) {
-      setError('Max buy (ref) must be a positive number.');
-      return;
+    // All caps are optional. Empty = "no per-SKU override for this field".
+    let maxBuyRef: number | undefined;
+    if (form.maxBuyRef.trim() !== '') {
+      const v = parsePositive(form.maxBuyRef);
+      if (v === null) {
+        setError('Max buy (ref) must be a positive number.');
+        return;
+      }
+      maxBuyRef = v;
     }
-    const minSellRef = form.minSellRef.trim() === '' ? null : parseRef(form.minSellRef);
-    if (form.minSellRef.trim() !== '' && minSellRef === null) {
-      setError('Min sell (ref) must be a positive number.');
-      return;
+    let minSellRef: number | null | undefined;
+    if (form.minSellRef.trim() !== '') {
+      const v = parsePositive(form.minSellRef);
+      if (v === null) {
+        setError('Min sell (ref) must be a positive number.');
+        return;
+      }
+      minSellRef = v;
     }
-    const priority = Number(form.priority);
-    if (!Number.isInteger(priority)) {
-      setError('Priority must be a whole number.');
-      return;
+    let maxQty: number | null | undefined;
+    if (form.maxQty.trim() !== '') {
+      const v = parsePositive(form.maxQty);
+      if (v === null || !Number.isInteger(v)) {
+        setError('Max qty must be a positive whole number.');
+        return;
+      }
+      maxQty = v;
     }
     const notes = form.notes.trim() === '' ? null : form.notes.trim();
 
-    const onError = (mutationError: Error): void => {
-      const message =
-        mutationError instanceof ApiError && mutationError.status === 409
-          ? 'A watchlist entry with this SKU already exists.'
-          : mutationError.message;
-      setError(message);
-    };
-
-    if (isEdit) {
-      const input: UpdateWatchlistInput = { maxBuyRef, minSellRef, priority, notes };
-      update.mutate(
-        { id: entry.id, input },
-        {
-          onSuccess: () => {
-            toast.success(`Updated ${entry.skuKey}`);
-            onOpenChange(false);
-          },
-          onError,
-        },
-      );
-    } else {
-      const input: CreateWatchlistInput = { skuKey: form.skuKey.trim(), maxBuyRef, minSellRef, priority, notes };
-      create.mutate(input, {
-        onSuccess: (created) => {
-          toast.success(`Added ${created.skuKey} to watchlist`);
-          onOpenChange(false);
-        },
-        onError,
-      });
-    }
+    const input: UpsertWatchlistInput = { skuKey, maxBuyRef, minSellRef, maxQty, notes };
+    upsert.mutate(input, {
+      onSuccess: () => {
+        toast.success(`Saved ${skuKey}`);
+        onOpenChange(false);
+      },
+      onError: (e) => setError(e.message),
+    });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isEdit ? `Edit ${entry.skuKey}` : 'Add SKU to watchlist'}</DialogTitle>
+          <DialogTitle>{isEdit ? `Edit ${row.name ?? row.skuKey}` : 'Add SKU override'}</DialogTitle>
           <DialogDescription>
-            Watchlist entries drive what the bot bids on. SKU key format is{' '}
-            <code className="text-xs">defindex;quality;…</code>.
+            Per-SKU controls for the bot. Leave a field blank to use the default (pricedb rail /
+            global cap). SKU format is <code className="text-xs">defindex;quality;…</code>.
           </DialogDescription>
         </DialogHeader>
 
@@ -153,7 +141,7 @@ export function WatchlistEditor({
                 inputMode="decimal"
                 value={form.maxBuyRef}
                 onChange={(event) => set('maxBuyRef', event.target.value)}
-                placeholder="62.5"
+                placeholder="no cap"
               />
             </div>
             <div className="space-y-1.5">
@@ -163,19 +151,19 @@ export function WatchlistEditor({
                 inputMode="decimal"
                 value={form.minSellRef}
                 onChange={(event) => set('minSellRef', event.target.value)}
-                placeholder="optional"
+                placeholder="no floor"
               />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="priority">Priority</Label>
+              <Label htmlFor="maxQty">Max qty (how many to hold)</Label>
               <Input
-                id="priority"
+                id="maxQty"
                 inputMode="numeric"
-                value={form.priority}
-                onChange={(event) => set('priority', event.target.value)}
-                placeholder="0"
+                value={form.maxQty}
+                onChange={(event) => set('maxQty', event.target.value)}
+                placeholder="global default"
               />
             </div>
             <div className="space-y-1.5">
@@ -192,12 +180,12 @@ export function WatchlistEditor({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={upsert.isPending}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} disabled={pending}>
-            {pending ? <Loader2 className="size-4 animate-spin" /> : null}
-            {isEdit ? 'Save changes' : 'Add SKU'}
+          <Button onClick={handleSubmit} disabled={upsert.isPending}>
+            {upsert.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+            Save
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -16,8 +16,8 @@ vi.mock('../src/config/index.js', () => ({ env: h.env, loadEnv: () => h.env }));
 import {
   evaluateListingBuyPrice,
   evaluateListingSellPrice,
-  evaluateMarketMakingBuy,
-  evaluateMarketMakingSell,
+  priceCompetitiveBuy,
+  priceCompetitiveSell,
 } from '../src/pricing/strategy.js';
 
 describe('evaluateListingBuyPrice', () => {
@@ -104,61 +104,47 @@ describe('evaluateListingSellPrice', () => {
   });
 });
 
-describe('evaluateMarketMakingBuy', () => {
-  it('bids one scrap above the highest existing buy order', () => {
-    const r = evaluateMarketMakingBuy({ buys: [{ priceRef: 70.55 }, { priceRef: 70.44 }], sells: [] });
-    expect(r).toBe(70.66);
+describe('priceCompetitiveBuy', () => {
+  const base = { maxBuyCapRef: 30, minSpreadScrap: 1 };
+
+  it('bids at the pricedb buy level (the real market), not a stale book', () => {
+    // ToD: market buys 26.11, sells 26.44 → bid 26.11 (competitive), spread 3 scrap
+    const r = priceCompetitiveBuy({ refBuyRef: 26.11, refSellRef: 26.44, ...base });
+    expect(r).toBe(26.11);
   });
 
-  it('returns null when there are no buy orders to beat', () => {
-    expect(evaluateMarketMakingBuy({ buys: [], sells: [{ priceRef: 72.11 }] })).toBeNull();
+  it('returns null above the price cap', () => {
+    // 57 ref key > 30 cap → skip
+    expect(priceCompetitiveBuy({ refBuyRef: 57, refSellRef: 58, ...base })).toBeNull();
   });
 
-  it('caps the bid at MM_MAX_BUY_REF when set', () => {
-    h.env.MM_MAX_BUY_REF = 70.0;
-    const r = evaluateMarketMakingBuy({ buys: [{ priceRef: 70.55 }], sells: [] });
-    expect(r).toBe(70.0);
-    h.env.MM_MAX_BUY_REF = undefined;
+  it('returns null when the spread is below the minimum (no flip margin)', () => {
+    // sell − buy = 0.05 < 1 scrap → skip
+    expect(priceCompetitiveBuy({ refBuyRef: 5.0, refSellRef: 5.05, ...base })).toBeNull();
   });
 
-  it('hard rail: never bids above the pricedb reference buy', () => {
-    // book wants 70.66, but pricedb says the item is only worth 5 to buy → clamp to 5
-    const r = evaluateMarketMakingBuy({ buys: [{ priceRef: 70.55 }], sells: [] }, { refBuyRef: 5 });
-    expect(r).toBe(5);
+  it('trades a razor-thin 1-scrap spread (ToD-style)', () => {
+    // buy 26.11, sell 26.22 → exactly 1 scrap → allowed, bid 26.11
+    expect(priceCompetitiveBuy({ refBuyRef: 26.11, refSellRef: 26.22, ...base })).toBe(26.11);
   });
 
-  it('leaves the bid untouched when it is already within the pricedb rail', () => {
-    const r = evaluateMarketMakingBuy({ buys: [{ priceRef: 4 }], sells: [] }, { refBuyRef: 5 });
-    expect(r).toBe(4.11);
+  it('returns null on dust', () => {
+    expect(priceCompetitiveBuy({ refBuyRef: 0.01, refSellRef: 0.5, ...base })).toBeNull();
   });
 });
 
-describe('evaluateMarketMakingSell', () => {
-  it('undercuts the lowest ask by one scrap when above the cost floor', () => {
-    const r = evaluateMarketMakingSell({ buys: [], sells: [{ priceRef: 72.11 }, { priceRef: 72.22 }] }, 70.66);
-    expect(r).toBe(72.0);
+describe('priceCompetitiveSell', () => {
+  it('lists at the pricedb sell level when it clears the cost floor', () => {
+    // sell 26.44, cost 26.11 + 1 scrap floor 26.22 → 26.44
+    expect(priceCompetitiveSell(26.44, 26.11, 1)).toBe(26.44);
   });
 
-  it('returns null when there are no asks to undercut', () => {
-    expect(evaluateMarketMakingSell({ buys: [{ priceRef: 70.0 }], sells: [] }, 50)).toBeNull();
+  it('floors at cost + min spread when pricedb sell is below it', () => {
+    // sell 26.0 but cost 26.11 + 1 scrap = 26.22 → list at 26.22 (never at a loss)
+    expect(priceCompetitiveSell(26.0, 26.11, 1)).toBe(26.22);
   });
 
-  it('returns null when undercutting would dip below cost + min spread', () => {
-    // lowest 71.00 → undercut 70.89; cost 71.00 + 1 scrap = 71.11 > 70.89 → null
-    expect(evaluateMarketMakingSell({ buys: [], sells: [{ priceRef: 71.0 }] }, 71.0)).toBeNull();
-  });
-
-  it('hard rail: refuses to sell below the pricedb reference sell', () => {
-    // book undercut 72.00 is fine vs cost, but pricedb floor 73 forbids it → null
-    expect(
-      evaluateMarketMakingSell({ buys: [], sells: [{ priceRef: 72.11 }] }, 50, { refSellRef: 73 }),
-    ).toBeNull();
-  });
-
-  it('allows the undercut when it clears the pricedb reference sell', () => {
-    // undercut 72.00 >= floor max(cost+spread, refSell 70) → 72.00
-    expect(
-      evaluateMarketMakingSell({ buys: [], sells: [{ priceRef: 72.11 }] }, 50, { refSellRef: 70 }),
-    ).toBe(72.0);
+  it('returns null on dust', () => {
+    expect(priceCompetitiveSell(0.02, 0, 1)).toBeNull();
   });
 });

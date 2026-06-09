@@ -178,56 +178,48 @@ export function evaluateListingSellPrice(input: ListingPriceInput): number | nul
 }
 
 // ============================================================================
-// MVP simple market making (STRATEGY_MODE=market_making)
-// Pure functions over an order-book view. No fair value, no autoprice — just
-// sit one scrap inside the spread. buys[0] = highest bid, sells[0] = lowest ask
-// (see orderbook/orderBook.ts getOrderBook ordering).
+// Competitive market making (STRATEGY_MODE=market_making)
+// Price off the pricedb per-SKU reference (the real market level where bots buy
+// and sell), NOT the bp.tf WebSocket order book — that book is an incomplete
+// live stream, so it produced uncompetitive bids (e.g. 23.55 ref while the
+// market buys at 26.11). pricedb gives the true level; we bid there to actually
+// win, and only when there's a flippable spread.
 // ============================================================================
 
-export interface OrderBookView {
-  buys: Array<{ priceRef: number }>;
-  sells: Array<{ priceRef: number }>;
+export interface CompetitiveBuyInput {
+  /** pricedb BUY level in ref (where the market buys), already tightened by any per-SKU max-buy. */
+  refBuyRef: number;
+  /** pricedb SELL level in ref (where the market sells), already raised by any per-SKU min-sell. */
+  refSellRef: number;
+  /** Hard cap on what we'll pay for one item (ref). */
+  maxBuyCapRef: number;
+  /** Minimum flip spread to bother, in scrap (sell − buy must clear this). */
+  minSpreadScrap: number;
 }
 
 /**
- * BUY price = highest existing bid + 1 scrap (so we sit just above the book),
- * capped by env.MM_MAX_BUY_REF when set and — the hard rail — never above the
- * pricedb reference buy ({@link bounds.refBuyRef}). Returns null when there are
- * no bids to anchor against. Clamping the bid below the current best bid is fine
- * (we simply refuse to overpay) — it just won't win until the book comes to us.
+ * Competitive BUY price: bid at the pricedb buy level so we sit with the bots
+ * that actually transact (not below a stale order book). Returns null when the
+ * item is above our price cap, the price is dust, or the pricedb spread is too
+ * thin to flip (sell − buy < minSpread) — no point buying what we can't resell up.
  */
-export function evaluateMarketMakingBuy(orderbook: OrderBookView, bounds: RefBounds = {}): number | null {
-  const highest = orderbook.buys[0]?.priceRef;
-  if (highest == null) return null;
-  let price = round2(highest + SCRAP_INCREMENT);
-  if (bounds.refBuyRef != null && price > bounds.refBuyRef) {
-    price = round2(bounds.refBuyRef);
-  }
-  if (env.MM_MAX_BUY_REF != null && price > env.MM_MAX_BUY_REF) {
-    price = round2(env.MM_MAX_BUY_REF);
-  }
-  if (price <= 0) return null;
-  return price;
+export function priceCompetitiveBuy(i: CompetitiveBuyInput): number | null {
+  if (i.refBuyRef < MIN_VIABLE_REF || i.refSellRef < MIN_VIABLE_REF) return null;
+  if (i.refBuyRef > i.maxBuyCapRef) return null; // above the price cap → don't trade
+  const spread = round2(i.refSellRef - i.refBuyRef);
+  if (spread < i.minSpreadScrap * SCRAP_INCREMENT - 1e-9) return null; // no flippable margin
+  return round2(i.refBuyRef);
 }
 
 /**
- * SELL price = lowest existing ask − 1 scrap (undercut the floor), but never
- * below the floor = max(costBasis + MM_MIN_SPREAD_SCRAP scrap, pricedb reference
- * sell). The pricedb sell ({@link bounds.refSellRef}) is the hard rail: we won't
- * sell below it even to undercut. Returns null when there are no asks to
- * undercut, or undercutting would dip below the floor (selling at a loss / below
- * fair value / no edge).
+ * Competitive SELL price for an item we hold: list at the pricedb sell level, but
+ * never below cost + minSpread (no selling at a loss). If the floor lands above
+ * the market it just won't fill — safe, never a loss. Returns null on dust.
  */
-export function evaluateMarketMakingSell(
-  orderbook: OrderBookView,
-  costBasis: number,
-  bounds: RefBounds = {},
-): number | null {
-  const lowest = orderbook.sells[0]?.priceRef;
-  if (lowest == null) return null;
-  const undercut = round2(lowest - SCRAP_INCREMENT);
-  let floor = round2(costBasis + env.MM_MIN_SPREAD_SCRAP * SCRAP_INCREMENT);
-  if (bounds.refSellRef != null) floor = Math.max(floor, bounds.refSellRef);
-  if (undercut < floor) return null;
-  return undercut;
+export function priceCompetitiveSell(refSellRef: number, costBasis: number, minSpreadScrap: number): number | null {
+  if (refSellRef < MIN_VIABLE_REF) return null;
+  const floor = round2(costBasis + minSpreadScrap * SCRAP_INCREMENT);
+  const sell = round2(Math.max(refSellRef, floor));
+  if (sell <= costBasis) return null;
+  return sell;
 }

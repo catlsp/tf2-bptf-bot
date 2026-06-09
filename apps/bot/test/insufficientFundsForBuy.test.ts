@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
     TF2VAULT_RESERVE_REFINED: 0,
     MAX_LISTINGS: 30,
     MAX_POSITION_PER_SKU: 3,
+    WATCH_MAX_BUY_REF: 50,
     LISTING_PRICE_DRIFT_PCT: 2,
     LISTING_DETAILS_TEMPLATE: 'Bot offering {priceRef} ref',
     BPTF_LISTING_DELAY_MS: 0,
@@ -88,11 +89,9 @@ beforeEach(() => {
   h.prisma.listing.findMany.mockResolvedValue([]);
   h.redis.smembers.mockResolvedValue(['725;6']);
   h.getSkuName.mockResolvedValue('Tour of Duty Ticket');
-  // pricedb reference rails sit just outside the book, so they don't clamp the
-  // 24.11 bid — the funds gate is what's under test here.
+  // Competitive price = pricedb buy (26), spread 1 ref clears the min — so the bot
+  // wants to bid 26 ref. The funds gate is what's under test here.
   h.getRefPrice.mockReturnValue({ skuKey: '725;6', buyRef: 26, sellRef: 27 });
-  // The book wants ~24 ref to win the bid (highest 24 + 1 scrap = 24.11)...
-  h.getOrderBook.mockResolvedValue({ buys: [{ priceRef: 24 }], sells: [{ priceRef: 26 }] });
   // ...but we only hold 12 ref of liquid metal.
   h.safeLoadMetal.mockResolvedValue({ keys: 1, refined: 12, reclaimed: 0, scrap: 0, refinedTotal: 12 });
 });
@@ -103,7 +102,7 @@ describe('market-making BUY: insufficient funds', () => {
     expect(h.createListing).not.toHaveBeenCalled();
     expect(h.prisma.ourListing.create).not.toHaveBeenCalled();
     expect(h.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ skuKey: '725;6', desiredPriceRef: 24.11, availableRef: 12 }),
+      expect.objectContaining({ skuKey: '725;6', desiredPriceRef: 26, availableRef: 12 }),
       expect.stringContaining('insufficient funds'),
     );
   });

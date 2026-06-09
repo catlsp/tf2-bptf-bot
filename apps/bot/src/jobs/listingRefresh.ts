@@ -16,8 +16,8 @@ import { refToKeysAndMetal, hasPriceDrifted, quantizeForDisplay } from '../prici
 import {
   evaluateListingBuyPrice,
   evaluateListingSellPrice,
-  evaluateMarketMakingBuy,
-  evaluateMarketMakingSell,
+  priceCompetitiveBuy,
+  priceCompetitiveSell,
   type ListingMarket,
 } from '../pricing/strategy.js';
 import {
@@ -246,21 +246,20 @@ export async function runOnce(): Promise<void> {
       let desiredPriceRef: number | null;
       let fairValueRef: number;
       if (env.STRATEGY_MODE === 'market_making') {
-        // Hard-rails policy: no pricedb reference price → no BUY listing (we have
-        // no sane ceiling to clamp the bid to).
+        // Price off pricedb (the real market level), not the incomplete WS book.
+        // No pricedb reference → no BUY listing.
         const ref = getRefPrice(skuKey);
         if (!ref) {
           skipped++;
           continue;
         }
-        const ob = await getOrderBook(skuKey);
-        // Liquidity gate: only bid on a two-sided (actually-trading) book.
-        if (env.LISTING_REQUIRE_TWO_SIDED && (ob.buys.length === 0 || ob.sells.length === 0)) {
-          skipped++;
-          continue;
-        }
-        desiredPriceRef = evaluateMarketMakingBuy(ob, { refBuyRef: effectiveRefBuy(ref.buyRef, ovr) });
-        fairValueRef = desiredPriceRef ?? 0;
+        desiredPriceRef = priceCompetitiveBuy({
+          refBuyRef: effectiveRefBuy(ref.buyRef, ovr),
+          refSellRef: effectiveRefSell(ref.sellRef, ovr),
+          maxBuyCapRef: env.WATCH_MAX_BUY_REF,
+          minSpreadScrap: env.MM_MIN_SPREAD_SCRAP,
+        });
+        fairValueRef = round2((ref.buyRef + ref.sellRef) / 2);
         // Balance gate: only bid what we can actually fund. Not an error — the
         // natural state until a sale tops the wallet back up.
         if (desiredPriceRef != null && availableRef < desiredPriceRef) {
@@ -470,13 +469,12 @@ async function refreshSellListings(): Promise<{ created: number; updated: number
       // Per-SKU pause from the panel applies to selling too.
       const ovr = getOverride(skuKey);
       if (!isSkuActive(ovr)) continue;
-      // Hard-rails policy: no pricedb reference → don't list this SKU for sale.
+      // Price off pricedb sell (the real market level); no reference → don't list.
       const ref = getRefPrice(skuKey);
       if (!ref) continue;
-      const ob = await getOrderBook(skuKey);
-      fairValueRef = ob.sells[0]?.priceRef ?? ob.buys[0]?.priceRef ?? 0;
       const refSellRef = effectiveRefSell(ref.sellRef, ovr);
-      priceFor = (item) => evaluateMarketMakingSell(ob, item.acquiredPriceRef, { refSellRef });
+      fairValueRef = refSellRef;
+      priceFor = (item) => priceCompetitiveSell(refSellRef, item.acquiredPriceRef, env.MM_MIN_SPREAD_SCRAP);
     } else {
       const market = await buildMarketSnapshot(skuKey, meta);
       if (!market) continue;

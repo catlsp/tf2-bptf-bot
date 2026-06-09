@@ -12,11 +12,12 @@ import {
   evaluate,
   evaluateListingBuyPrice,
   evaluateListingSellPrice,
-  evaluateMarketMakingBuy,
-  evaluateMarketMakingSell,
+  priceCompetitiveBuy,
+  priceCompetitiveSell,
 } from '../pricing/strategy.js';
 import { buildMarketSnapshot, parseSkuKey } from '../jobs/listingRefresh.js';
 import { getOrderBook } from '../orderbook/orderBook.js';
+import { refreshPriceOracle, getRefPrice } from '../pricing/priceOracle.js';
 import { getOwnedListableItems } from '../inventory/inventoryService.js';
 
 // Same key the order-book/watch-list writer uses (see listingRefresh.ts).
@@ -24,6 +25,7 @@ const WATCHLIST_KEY = 'bptf:ob:watch';
 
 async function main(): Promise<void> {
   const limit = Number(process.argv[2] ?? 20);
+  await refreshPriceOracle(); // populate pricedb reference prices for this run
   const watch = (await redis.smembers(WATCHLIST_KEY)).slice(0, limit);
   const owned = await getOwnedListableItems();
   const ownedSkus = [...new Set(owned.map((o) => o.skuKey))];
@@ -49,11 +51,19 @@ async function main(): Promise<void> {
     }
     const owns = ownedSkus.includes(skuKey);
 
-    // Simple market-making prices straight off the live order book.
-    const ob = await getOrderBook(skuKey);
-    const mmBuy = evaluateMarketMakingBuy(ob);
-    const costBasis = costBasisBySku.get(skuKey) ?? ob.buys[0]?.priceRef ?? 0;
-    const mmSell = owns ? evaluateMarketMakingSell(ob, costBasis) : null;
+    // Competitive prices off the pricedb reference (the real market level).
+    const ob = await getOrderBook(skuKey); // kept only for the orderbook display below
+    const ref = getRefPrice(skuKey);
+    const mmBuy = ref
+      ? priceCompetitiveBuy({
+          refBuyRef: ref.buyRef,
+          refSellRef: ref.sellRef,
+          maxBuyCapRef: env.WATCH_MAX_BUY_REF,
+          minSpreadScrap: env.MM_MIN_SPREAD_SCRAP,
+        })
+      : null;
+    const costBasis = costBasisBySku.get(skuKey) ?? ref?.buyRef ?? 0;
+    const mmSell = owns && ref ? priceCompetitiveSell(ref.sellRef, costBasis, env.MM_MIN_SPREAD_SCRAP) : null;
 
     // Arbitrage-mode comparison (needs the richer snapshot).
     const market = await buildMarketSnapshot(skuKey, meta);

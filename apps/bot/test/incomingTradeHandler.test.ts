@@ -36,7 +36,7 @@ import {
   type ListingView,
   type OfferView,
 } from '../src/trading/incomingTradeHandler.js';
-import { evaluateMarketMakingBuy, evaluateMarketMakingSell } from '../src/pricing/strategy.js';
+import { priceCompetitiveBuy, priceCompetitiveSell } from '../src/pricing/strategy.js';
 
 const SELL_LISTING: ListingView = { source: 'listing', listingId: 'L1', intent: 'sell', skuKey: '725;6', assetId: 'A1', priceRef: 24 };
 
@@ -85,13 +85,11 @@ describe('evaluateIncomingOffer', () => {
 
 describe('PAPER round-trip: MM prices → fill → settle', () => {
   it('5021;6: buy 70.66, sell 72.00, incoming offer fills sell, inventory SOLD + trade profit 1.34', async () => {
-    const ob = { buys: [{ priceRef: 70.55 }, { priceRef: 70.44 }, { priceRef: 70.33 }], sells: [{ priceRef: 72.11 }, { priceRef: 72.22 }, { priceRef: 72.33 }] };
-
-    // 1. Market-making prices.
-    const buyPrice = evaluateMarketMakingBuy(ob);
+    // 1. Competitive prices off the pricedb reference (buy 70.66 / sell 72.00).
+    const buyPrice = priceCompetitiveBuy({ refBuyRef: 70.66, refSellRef: 72.0, maxBuyCapRef: 1000, minSpreadScrap: 1 });
     expect(buyPrice).toBe(70.66);
     const costBasis = 70.66; // we own a key acquired at our own bid
-    const sellPrice = evaluateMarketMakingSell(ob, costBasis);
+    const sellPrice = priceCompetitiveSell(72.0, costBasis, 1);
     expect(sellPrice).toBe(72.0);
 
     // 2. Inbound offer that fills our SELL listing at the ask.

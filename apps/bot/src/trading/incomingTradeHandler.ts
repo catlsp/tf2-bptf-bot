@@ -1,11 +1,12 @@
 import { env } from '../config/index.js';
 import { prisma, logEvent } from '../integrations/db.js';
-import { manager } from '../integrations/steam.js';
+import { manager, confirmOffer, sortBackpack, relogGame } from '../integrations/steam.js';
 import { currentKeyRef } from '../integrations/bptf.js';
 import { logger } from '../lib/logger.js';
 import { errMessage } from '../lib/errors.js';
 import { round2 } from '../lib/utils.js';
 import { getOrCreateItemId } from '../persistence/items.js';
+import { runOnce as refreshListingsNow } from '../jobs/listingRefresh.js';
 
 // Inbound trade-offer handling for the maker side: someone sends us an offer to
 // fill one of our active classifieds listings. We validate it against the DB and
@@ -340,9 +341,16 @@ async function handleIncomingOffer(rawOffer: SteamOffer): Promise<void> {
     if (env.PAPER_TRADING) {
       logger.warn({ offerId: offer.offerId }, 'PAPER_TRADING — would accept, not touching Steam');
     } else {
-      await new Promise<void>((resolve, reject) =>
-        rawOffer.accept((err) => (err ? reject(err) : resolve())),
+      // accept() may return status 'pending' meaning Steam needs a mobile
+      // confirmation (any offer where we give items: metal on a buy, the item on
+      // a sell). Confirm with the identity secret or the trade never completes.
+      const status = await new Promise<string>((resolve, reject) =>
+        rawOffer.accept((err: Error | null, s?: string) => (err ? reject(err) : resolve(s ?? 'completed'))),
       );
+      if (status === 'pending') {
+        await confirmOffer(offer.offerId);
+        logger.info({ offerId: offer.offerId }, 'offer mobile-confirmed');
+      }
     }
 
     if (decision.intent === 'sell') {
@@ -350,8 +358,30 @@ async function handleIncomingOffer(rawOffer: SteamOffer): Promise<void> {
     } else {
       await settleAcceptedBuy(decision.listingId, offer);
     }
+
+    // A real trade changed our inventory: sort the backpack (nudges bp.tf to
+    // re-read), rejoin the game, and refresh listings so bp.tf reflects it.
+    if (!env.PAPER_TRADING) {
+      await runPostTradeTasks();
+    }
   } catch (e) {
     logger.error({ err: errMessage(e), offerId: offer.offerId }, 'failed to handle incoming offer');
+  }
+}
+
+/**
+ * After a real trade completes: sort the backpack by quality (writes to the GC,
+ * prompting bp.tf to re-read the inventory), rejoin the game, then re-run the
+ * listing refresh so our bp.tf listings match the new inventory (sold listing
+ * gone, bought item listed). Self-guarded — never throws into the offer handler.
+ */
+async function runPostTradeTasks(): Promise<void> {
+  try {
+    sortBackpack();
+    await refreshListingsNow();
+    await relogGame();
+  } catch (e) {
+    logger.warn({ err: errMessage(e) }, 'post-trade tasks failed');
   }
 }
 

@@ -24,6 +24,7 @@
     "steam-tradeoffer-manager": "^2.11.5",
     "steam-user": "^5.2.0",
     "steamcommunity": "^3.48.0",
+    "tf2": "^4.0.0",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
   },

@@ -67,6 +67,10 @@ const schema = z.object({
   // How often to refresh the pricedb.io reference-price oracle (seconds). These
   // prices are the hard buy/sell rails every trade and listing is clamped to.
   PRICEDB_REFRESH_SEC: numFromStr(1800, 60),
+  // TF2 GC backpack sort type used after a trade (and on demand). The GC doesn't
+  // publish a public enum; 3 is "by quality" in common usage. If it sorts the
+  // wrong way, try another value (1..5).
+  TF2_SORT_TYPE: numFromStr(3, 0),
   // 'manual' pins the watch-list to config/watch-list.json (no pricedb auto-refresh).
   // 'auto' builds it from pricedb's priced feed, filtered to affordable items.
   WATCHLIST_MODE: z.enum(['manual', 'auto']).default('manual'),

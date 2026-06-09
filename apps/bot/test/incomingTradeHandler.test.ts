@@ -17,7 +17,13 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('../src/config/index.js', () => ({ env: h.env, loadEnv: () => h.env }));
 vi.mock('../src/integrations/db.js', () => ({ prisma: h.prisma, logEvent: vi.fn() }));
-vi.mock('../src/integrations/steam.js', () => ({ manager: h.manager }));
+vi.mock('../src/integrations/steam.js', () => ({
+  manager: h.manager,
+  confirmOffer: vi.fn().mockResolvedValue(undefined),
+  sortBackpack: vi.fn(),
+  relogGame: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('../src/jobs/listingRefresh.js', () => ({ runOnce: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../src/integrations/bptf.js', () => ({ currentKeyRef: h.currentKeyRef }));
 vi.mock('../src/lib/logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },

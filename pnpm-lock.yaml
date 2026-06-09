@@ -96,6 +96,9 @@ importers:
       steamcommunity:
         specifier: ^3.48.0
         version: 3.50.0
+      tf2:
+        specifier: ^4.0.0
+        version: 4.0.0
       ws:
         specifier: ^8.18.0
         version: 8.21.0
@@ -3158,6 +3161,10 @@ packages:
     resolution: {integrity: sha512-3ofp+LL8E+pK/JuPLPggVAIaEuhvIz4qNcf3nA1Xn2o/7fb7s/TYpHhwGDv1ZU3PkBluUVaF8PyCHcm48cKLWQ==}
     engines: {node: '>=14.0.0'}
     hasBin: true
+
+  tf2@4.0.0:
+    resolution: {integrity: sha512-IdUCTZdL1foWlwe95qs7jB9vIwrjN3+GefQ7W2+9FRqdWoIfYQzY4TXBZCUfPS0QK3TD8baslSxMBdaMAztC/w==}
+    engines: {node: '>=14.0.0'}
 
   thenify-all@1.6.0:
     resolution: {integrity: sha512-RNxQH/qI8/t3thXJDwcstUO4zeqo64+Uy/+sNVRBx4Xn2OX+OZ9oP+iJnNFqplFra2ZUVeKCSa2oVWi3T4uVmA==}
@@ -6278,6 +6285,14 @@ snapshots:
     transitivePeerDependencies:
       - tsx
       - yaml
+
+  tf2@4.0.0:
+    dependencies:
+      '@doctormckay/stdlib': 2.10.0
+      bytebuffer: 5.0.1
+      kvparser: 1.0.2
+      protobufjs: 7.6.2
+      steamid: 2.1.0
 
   thenify-all@1.6.0:
     dependencies:

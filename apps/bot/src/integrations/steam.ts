@@ -2,15 +2,18 @@ import SteamUser from 'steam-user';
 import SteamTotp from 'steam-totp';
 import SteamCommunity from 'steamcommunity';
 import TradeOfferManager from 'steam-tradeoffer-manager';
+import TeamFortress2 from 'tf2';
 import { env } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import { errMessage } from '../lib/errors.js';
-import { DEFINDEX, metalToRef } from '../lib/utils.js';
+import { sleep, DEFINDEX, metalToRef } from '../lib/utils.js';
 
 // Steam wrapper. Mirrors tf2vault bot.js: logOn with a TOTP code, refresh the
 // web session every 15 min, rebuild the TradeOfferManager cookies on webSession,
-// re-login on error with eresult-aware backoff. Phase 1 only logs in + idles +
-// reads inventory; it sends NOTHING.
+// re-login on error with eresult-aware backoff. Idles in TF2 and keeps a Game
+// Coordinator session so it can sort the backpack (which also nudges bp.tf to
+// re-read the inventory). Real accepts are mobile-confirmed with the identity
+// secret.
 
 const client = new SteamUser();
 const community = new SteamCommunity();
@@ -20,12 +23,77 @@ const manager = new TradeOfferManager({
   language: 'en',
   cancelTime: 5 * 60 * 1000,
 });
+// TF2 Game Coordinator client — connects automatically once we're "playing" 440.
+const tf2 = new TeamFortress2(client);
 
 export { client, community, manager };
 
 let ready = false;
 export function isSteamReady(): boolean {
   return ready;
+}
+
+let gcReady = false;
+tf2.on('connectedToGC', () => {
+  gcReady = true;
+  logger.info('TF2 game coordinator connected');
+});
+tf2.on('disconnectedFromGC', () => {
+  gcReady = false;
+  logger.warn('TF2 game coordinator disconnected');
+});
+
+export function isGcReady(): boolean {
+  return gcReady;
+}
+
+/**
+ * Ask the GC to sort the backpack (default: by quality). Sorting writes to the
+ * backpack, which prompts bp.tf to re-read our inventory — so listings reflect
+ * what we actually hold. No-op until the GC session is up.
+ */
+export function sortBackpack(): void {
+  if (!gcReady) {
+    logger.warn('skip sortBackpack: GC not ready');
+    return;
+  }
+  try {
+    tf2.sortBackpack(env.TF2_SORT_TYPE);
+    logger.info({ sortType: env.TF2_SORT_TYPE }, 'requested backpack sort');
+  } catch (e) {
+    logger.warn({ err: errMessage(e) }, 'sortBackpack failed');
+  }
+}
+
+/**
+ * Leave TF2 and rejoin a few seconds later. The rejoin re-establishes the GC
+ * session and refreshes our online/in-game state, which (together with a sort)
+ * gets bp.tf to pick up inventory changes after a trade.
+ */
+export async function relogGame(): Promise<void> {
+  try {
+    client.gamesPlayed([]);
+    await sleep(3000);
+    client.gamesPlayed([440]);
+    logger.info('rejoined TF2');
+  } catch (e) {
+    logger.warn({ err: errMessage(e) }, 'relogGame failed');
+  }
+}
+
+/**
+ * Mobile-confirm a trade offer with the account's identity secret. Any accept
+ * where we give items (metal on a buy, the item on a sell) needs this or the
+ * trade never completes. Safe to call even when no confirmation is pending.
+ */
+export function confirmOffer(offerId: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    community.acceptConfirmationForObject(
+      env.STEAM_IDENTITY_SECRET,
+      offerId,
+      (err: Error | null) => (err ? reject(err) : resolve()),
+    );
+  });
 }
 
 function buildLogOnOptions() {

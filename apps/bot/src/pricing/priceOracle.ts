@@ -3,6 +3,7 @@ import { logger } from '../lib/logger.js';
 import { round2, sleep } from '../lib/utils.js';
 import { errMessage } from '../lib/errors.js';
 import { redis } from '../integrations/redis.js';
+import { prisma } from '../integrations/db.js';
 import { currentKeyRef } from '../integrations/bptf.js';
 import { fetchPricedbItem, type PricedbRow } from './pricedbFeed.js';
 
@@ -99,6 +100,21 @@ export async function refreshPriceOracle(): Promise<number> {
     logger.warn({ err: errMessage(e) }, '[oracle] could not read watch set — keeping existing reference prices');
     return cache.size;
   }
+
+  // Items we HOLD or have LISTED must always be priced (the sell path needs the
+  // pricedb sell rail) even if the rotating watch set no longer contains them.
+  try {
+    const owned = await prisma.inventoryItem.findMany({
+      where: { status: { in: ['HELD', 'LISTED'] } },
+      select: { item: { select: { skuKey: true } } },
+    });
+    const skuSet = new Set(skus);
+    for (const o of owned) skuSet.add(o.item.skuKey);
+    skus = [...skuSet];
+  } catch (e) {
+    logger.debug({ err: errMessage(e) }, '[oracle] owned-sku lookup failed; pricing watch set only');
+  }
+
   if (skus.length === 0) {
     logger.warn('[oracle] watch set empty — keeping existing reference prices');
     return cache.size;

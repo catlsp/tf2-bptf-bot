@@ -8,12 +8,14 @@ const h = vi.hoisted(() => ({
   env: { PRICEDB_REFRESH_SEC: 1800 } as Record<string, unknown>,
   fetchPricedbItem: vi.fn(),
   smembers: vi.fn(),
+  ownedFindMany: vi.fn(),
   currentKeyRef: vi.fn(() => 63),
 }));
 
 vi.mock('../src/config/index.js', () => ({ env: h.env, loadEnv: () => h.env }));
 vi.mock('../src/pricing/pricedbFeed.js', () => ({ fetchPricedbItem: h.fetchPricedbItem }));
 vi.mock('../src/integrations/redis.js', () => ({ redis: { smembers: h.smembers } }));
+vi.mock('../src/integrations/db.js', () => ({ prisma: { inventoryItem: { findMany: h.ownedFindMany } } }));
 vi.mock('../src/integrations/bptf.js', () => ({ currentKeyRef: h.currentKeyRef }));
 vi.mock('../src/lib/utils.js', async (orig) => {
   const actual = await orig<typeof import('../src/lib/utils.js')>();
@@ -30,6 +32,7 @@ const now = () => Math.floor(Date.now() / 1000);
 beforeEach(() => {
   vi.clearAllMocks();
   h.currentKeyRef.mockReturnValue(63);
+  h.ownedFindMany.mockResolvedValue([]);
 });
 
 describe('priceOracle', () => {
@@ -104,6 +107,16 @@ describe('priceOracle', () => {
 
     expect(getRefPrice('a;6')).toMatchObject({ buyRef: 3, sellRef: 4 });
     expect(getRefPrice('b;6')).toMatchObject({ buyRef: 1, sellRef: 2 });
+  });
+
+  it('prices owned (HELD/LISTED) SKUs even when absent from the watch set', async () => {
+    h.smembers.mockResolvedValue(['watched;6']);
+    h.ownedFindMany.mockResolvedValue([{ item: { skuKey: 'owned;6' } }]);
+    h.fetchPricedbItem.mockImplementation((sku: string) =>
+      Promise.resolve({ sku, buy: { metal: 1 }, sell: { metal: 2 }, time: now() }),
+    );
+    await refreshPriceOracle();
+    expect(getRefPrice('owned;6')).toMatchObject({ buyRef: 1, sellRef: 2 });
   });
 
   it('drops rows with no price on either side', async () => {

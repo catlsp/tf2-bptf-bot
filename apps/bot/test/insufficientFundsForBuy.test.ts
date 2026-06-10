@@ -25,9 +25,9 @@ const h = vi.hoisted(() => ({
     BUY_DISCOUNT_PCT: 8,
   } as Record<string, unknown>,
   prisma: {
-    ourListing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    ourListing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     inventoryItem: { findMany: vi.fn(), update: vi.fn() },
-    listing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    listing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   },
   logEvent: vi.fn(),
   redis: { smembers: vi.fn() },

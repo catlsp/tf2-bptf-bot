@@ -24,9 +24,9 @@ const h = vi.hoisted(() => ({
     MAX_POSITION_PER_SKU: 3,
   } as Record<string, unknown>,
   prisma: {
-    ourListing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    ourListing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     inventoryItem: { findMany: vi.fn(), update: vi.fn() },
-    listing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    listing: { findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   },
   logEvent: vi.fn(),
   redis: { smembers: vi.fn() },

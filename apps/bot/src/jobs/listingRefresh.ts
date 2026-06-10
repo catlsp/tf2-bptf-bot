@@ -96,6 +96,28 @@ function isCurrencySku(skuKey: string): boolean {
   return /^(5021|5002|5001|5000);/.test(skuKey);
 }
 
+/**
+ * Composite items (killstreak kits td-, fabricators od-/oq-, strangifiers) can't
+ * be expressed by our name+quality createListing — bp.tf rejects them with
+ * "Item is invalid". Don't try to BUY-list them.
+ */
+function isCompositeSku(skuKey: string): boolean {
+  return /;(td|od|oq)-/.test(skuKey);
+}
+
+/**
+ * bp.tf v2 listing ids are deterministic per item+account, so re-creating a
+ * previously deleted listing returns the SAME id — and our old (deleted/failed)
+ * row still holding it breaks the unique constraint on write. Release the id
+ * from any other row before assigning it.
+ */
+async function releaseBptfListingId(bptfListingId: string, keepRowId: string): Promise<void> {
+  await prisma.ourListing.updateMany({
+    where: { bptfListingId, NOT: { id: keepRowId } },
+    data: { bptfListingId: null },
+  });
+}
+
 // Listing descriptions carry the item name + price so the classified reads like
 // "Buying <item> for <price> ref" instead of an anonymous price. itemName may be
 // null when the pricedb name cache is cold — fall back to a neutral phrase.
@@ -217,7 +239,7 @@ export async function runOnce(): Promise<void> {
     }
 
     for (const skuKey of watchSkus) {
-      if (isCurrencySku(skuKey)) {
+      if (isCurrencySku(skuKey) || isCompositeSku(skuKey)) {
         skipped++;
         continue;
       }
@@ -366,6 +388,10 @@ export async function runOnce(): Promise<void> {
 
         // v2 create is synchronous: a real id means 'active' immediately. A null id
         // (legacy/queued path or a mock) stays 'pending' for listingReconcile.
+        // Deterministic v2 ids: free the id from old deleted/failed rows first.
+        if (result.bptfListingId) {
+          await releaseBptfListingId(result.bptfListingId, dbRow.id);
+        }
         await prisma.ourListing.update({
           where: { id: dbRow.id },
           data: {
@@ -566,6 +592,14 @@ async function createSellListing(args: {
   if ('skipped' in result) {
     logger.warn({ skuKey, itemId: item.itemId, reason: result.reason }, 'sell listing skipped by validation');
     return null;
+  }
+
+  // Deterministic v2 ids: free the id from old closed rows before reusing it.
+  if (result.bptfListingId) {
+    await prisma.listing.updateMany({
+      where: { bptfListingId: result.bptfListingId },
+      data: { bptfListingId: null },
+    });
   }
 
   // v2 create is synchronous: bptfListingId is the real id (or null in a mock).

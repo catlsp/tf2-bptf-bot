@@ -6,6 +6,7 @@ import { logger } from '../lib/logger.js';
 import { errMessage } from '../lib/errors.js';
 import { round2 } from '../lib/utils.js';
 import { getOrCreateItemId } from '../persistence/items.js';
+import { econItemToSku } from '../util/itemToSku.js';
 import { runOnce as refreshListingsNow } from '../jobs/listingRefresh.js';
 
 // Inbound trade-offer handling for the maker side: someone sends us an offer to
@@ -119,7 +120,8 @@ interface SteamEconItem {
   assetid: string;
   market_hash_name?: string;
   name?: string;
-  app_data?: { def_index?: string | number };
+  app_data?: { def_index?: string | number; quality?: string | number };
+  descriptions?: Array<{ value?: string }>;
 }
 interface SteamOffer {
   id: string;
@@ -141,9 +143,13 @@ function normalizeOffer(offer: SteamOffer): OfferView {
     offerId: String(offer.id),
     partnerSteamId: offer.partner.getSteamID64(),
     ourItemAssetIds: give.filter((i) => !isCurrency(i)).map((i) => String(i.assetid)),
+    // Exact SKU per received item (quality + craftability included), so e.g. a
+    // Non-Craftable or Strange variant can never fill a listing priced for the
+    // plain craftable item. Unexpressible items (killstreak/australium/festive)
+    // map to a sentinel that matches nothing → such offers get declined.
     theirItemSkus: receive
       .filter((i) => !isCurrency(i))
-      .map((i) => (i.app_data?.def_index != null ? `${i.app_data.def_index};6` : (i.market_hash_name ?? ''))),
+      .map((i) => econItemToSku(i) ?? `unmatchable:${i.assetid}`),
     theirItemAssetIds: receive.filter((i) => !isCurrency(i)).map((i) => String(i.assetid)),
     currencyRefFromThem: valueCurrencyRef(receive),
     currencyRefToThem: valueCurrencyRef(give),

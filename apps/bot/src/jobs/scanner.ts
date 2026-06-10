@@ -54,6 +54,11 @@ async function scanOnce(): Promise<void> {
         // Persist a price snapshot for every scanned SKU with market data. This
         // self-guards against DB errors, so it never breaks the scan loop.
         await recordPriceSnapshot(sku, fair);
+        // market_making is maker-only: all real action happens via our bp.tf
+        // listings (listingRefresh) and inbound offers. Outbound taker offers are
+        // not plumbed, so acting on scanner decisions here would only spam FAILED
+        // trades. The scan still records snapshots for the panel.
+        if (env.STRATEGY_MODE === 'market_making') continue;
         // Hard-rails policy: without a pricedb reference price we have no sane
         // bounds, so we never trade this SKU (we still recorded its snapshot).
         if (!hasRef) continue;

@@ -42,6 +42,7 @@ import {
   effectiveRefSell,
 } from '../watchlist/overrides.js';
 import { openPositionForSku } from '../risk/limits.js';
+import { isUnsupportedSku, baseItemName } from '../util/itemToSku.js';
 
 // Phase 2: maintain our BUY listings on bp.tf.
 // - Runs every LISTING_REFRESH_INTERVAL_SEC.
@@ -96,14 +97,6 @@ function isCurrencySku(skuKey: string): boolean {
   return /^(5021|5002|5001|5000);/.test(skuKey);
 }
 
-/**
- * Composite items (killstreak kits td-, fabricators od-/oq-, strangifiers) can't
- * be expressed by our name+quality createListing — bp.tf rejects them with
- * "Item is invalid". Don't try to BUY-list them.
- */
-function isCompositeSku(skuKey: string): boolean {
-  return /;(td|od|oq)-/.test(skuKey);
-}
 
 /**
  * bp.tf v2 listing ids are deterministic per item+account, so re-creating a
@@ -239,7 +232,7 @@ export async function runOnce(): Promise<void> {
     }
 
     for (const skuKey of watchSkus) {
-      if (isCurrencySku(skuKey) || isCompositeSku(skuKey)) {
+      if (isCurrencySku(skuKey) || isUnsupportedSku(skuKey)) {
         skipped++;
         continue;
       }
@@ -385,7 +378,9 @@ export async function runOnce(): Promise<void> {
           defindex: meta.defindex,
           quality: meta.quality,
           craftable: meta.craftable,
-          itemName,
+          // bp.tf resolves by BASE schema name; quality/craftability are separate
+          // fields ("Strange X" / "Non-Craftable X" prefixes would 500).
+          itemName: itemName ? baseItemName(itemName, meta.quality, meta.craftable) : itemName,
           priceKeys: keys,
           priceMetal: metal,
           details,

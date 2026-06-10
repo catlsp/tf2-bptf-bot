@@ -5,6 +5,7 @@ import { logger } from '../lib/logger.js';
 import { errMessage } from '../lib/errors.js';
 import { loadWatchList, WATCH_LIST_PATH } from '../orderbook/orderBook.js';
 import { fetchPricedbRows, type PricedbRow } from '../pricing/pricedbFeed.js';
+import { isUnsupportedSku } from '../util/itemToSku.js';
 import { getSeedWatchlist } from './seed.js';
 
 // Builds the watch list dynamically from pricedb.io's priced feed, filtered to
@@ -47,6 +48,8 @@ export async function refreshWatchList(): Promise<void> {
     (r): r is PricedbRow & { sku: string } =>
       typeof r.sku === 'string' &&
       r.sku.length > 0 &&
+      // war-paints/killstreaks/kits etc. can't be listed by name — don't watch them
+      !isUnsupportedSku(r.sku) &&
       r.buy != null &&
       !r.buy.keys &&
       typeof r.buy.metal === 'number' &&

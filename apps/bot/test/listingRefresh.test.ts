@@ -262,6 +262,19 @@ describe('listingRefresh — Phase 2 BUY maker', () => {
     expect(h.createListing).not.toHaveBeenCalled();
   });
 
+  it('15. unsupported SKU with a live listing → retired (we would decline its fills)', async () => {
+    h.redis.smembers.mockResolvedValue(['312;6;kt-1']);
+    h.prisma.ourListing.findMany.mockResolvedValue([activeRow({ skuKey: '312;6;kt-1' })]);
+    h.listMyListings.mockResolvedValue([{ bptfListingId: '111', intent: 'buy' }]);
+    await runOnce();
+    expect(h.deleteListing).toHaveBeenCalledWith('111');
+    const closed = h.prisma.ourListing.update.mock.calls.find(
+      (c) => (c[0] as { data?: { errorMessage?: string } }).data?.errorMessage === 'unsupported_sku',
+    );
+    expect(closed).toBeDefined();
+    expect(h.createListing).not.toHaveBeenCalled();
+  });
+
   it('bonus: deleteAllOurListings deletes every active listing', async () => {
     h.prisma.ourListing.findMany.mockResolvedValue([activeRow({ bptfListingId: '111' }), activeRow({ id: 'a2', bptfListingId: '222' })]);
     await deleteAllOurListings('manual');

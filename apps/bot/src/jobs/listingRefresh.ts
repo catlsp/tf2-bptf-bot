@@ -231,8 +231,33 @@ export async function runOnce(): Promise<void> {
       availableRef = round2(Math.max(0, counts.refinedTotal - env.TF2VAULT_RESERVE_REFINED));
     }
 
+    // Retire a live BUY listing we no longer want (delete on bp.tf + close the
+    // row). Used by every gate that stops us bidding on a SKU — otherwise the
+    // classified would stay up advertising a buy we'd refuse to honor.
+    const retireBuy = async (skuKey: string, reason: string): Promise<void> => {
+      const existing = bySkuKey.get(skuKey);
+      if (!existing) return;
+      try {
+        if (existing.bptfListingId) await deleteListing(existing.bptfListingId);
+        await prisma.ourListing.update({
+          where: { id: existing.id },
+          data: { status: 'deleted', deletedAt: new Date(), errorMessage: reason },
+        });
+        bySkuKey.delete(skuKey);
+        totalActive--;
+        deleted++;
+        logger.info({ skuKey, reason }, 'BUY listing retired');
+      } catch (e) {
+        errors++;
+        logger.warn({ err: errMessage(e), skuKey }, 'failed to retire BUY listing');
+      }
+    };
+
     for (const skuKey of watchSkus) {
       if (isCurrencySku(skuKey) || isUnsupportedSku(skuKey)) {
+        // e.g. a killstreak listing created before the unsupported-SKU gate
+        // existed — we'd decline its fills, so take it down.
+        await retireBuy(skuKey, 'unsupported_sku');
         skipped++;
         continue;
       }
@@ -251,24 +276,7 @@ export async function runOnce(): Promise<void> {
       const cap = effectiveCap(ovr, env.MAX_POSITION_PER_SKU);
       const held = await openPositionForSku(skuKey);
       if (!isSkuActive(ovr) || held >= cap) {
-        const reason = !isSkuActive(ovr) ? 'paused' : 'position_cap_reached';
-        const existing = bySkuKey.get(skuKey);
-        if (existing) {
-          try {
-            if (existing.bptfListingId) await deleteListing(existing.bptfListingId);
-            await prisma.ourListing.update({
-              where: { id: existing.id },
-              data: { status: 'deleted', deletedAt: new Date(), errorMessage: reason },
-            });
-            bySkuKey.delete(skuKey);
-            totalActive--;
-            deleted++;
-            logger.info({ skuKey, held, cap, reason }, 'BUY listing retired');
-          } catch (e) {
-            errors++;
-            logger.warn({ err: errMessage(e), skuKey }, 'failed to retire BUY listing');
-          }
-        }
+        await retireBuy(skuKey, !isSkuActive(ovr) ? 'paused' : 'position_cap_reached');
         skipped++;
         continue;
       }

@@ -78,6 +78,9 @@ const schema = z.object({
   // and at or below this many ref — keeps the list inside the junk-flip capital
   // band instead of tracking key-priced items the bot can't fund.
   WATCH_MAX_BUY_REF: numFromStr(50, 1),
+  // How often the auto watch list re-pulls pricedb's rotating feed and
+  // accumulates new affordable SKUs (seconds). Hourly grows coverage steadily.
+  WATCHLIST_REFRESH_SEC: numFromStr(3600, 60),
   MAX_HOLD_DAYS: numFromStr(7, 1),
   MAX_POSITION_PER_SKU: numFromStr(3, 1),
   MAX_DAILY_TRADES: numFromStr(30, 1),

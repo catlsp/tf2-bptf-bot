@@ -115,4 +115,19 @@ describe('market-making BUY: insufficient funds', () => {
     const arg = h.createListing.mock.calls[0][0] as { intent: string; priceMetal: number };
     expect(arg.intent).toBe('buy');
   });
+
+  it('cumulative gate: many bids cannot collectively over-promise the wallet', async () => {
+    // Wallet 30 ref; two SKUs each bidding 26 — the first commits 26, leaving 4,
+    // so the second must be skipped (26+26 would promise 52 > 30).
+    h.redis.smembers.mockResolvedValue(['725;6', '1013;6']);
+    h.getRefPrice.mockReturnValue({ skuKey: 'x', buyRef: 26, sellRef: 27 });
+    h.safeLoadMetal.mockResolvedValue({ keys: 0, refined: 30, reclaimed: 0, scrap: 0, refinedTotal: 30 });
+    h.createListing.mockResolvedValue({ bptfListingId: '999', queued: false });
+    await runOnce();
+    expect(h.createListing).toHaveBeenCalledTimes(1);
+    expect(h.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ desiredPriceRef: 26, availableRef: 30, committedRef: 26 }),
+      expect.stringContaining('insufficient funds'),
+    );
+  });
 });

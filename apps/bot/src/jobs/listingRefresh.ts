@@ -225,7 +225,10 @@ export async function runOnce(): Promise<void> {
 
     // Market-making BUYs must be funded by liquid metal we actually hold. Compute
     // the spendable refined once (reserve held back). Arbitrage mode is ungated.
+    // committedRef accumulates the bids we keep/create THIS pass, so many small
+    // listings can't collectively promise more metal than the wallet holds.
     let availableRef = Infinity;
+    let committedRef = 0;
     if (env.STRATEGY_MODE === 'market_making') {
       const counts = await safeLoadMetal();
       availableRef = round2(Math.max(0, counts.refinedTotal - env.TF2VAULT_RESERVE_REFINED));
@@ -298,11 +301,12 @@ export async function runOnce(): Promise<void> {
           minSpreadScrap: env.MM_MIN_SPREAD_SCRAP,
         });
         fairValueRef = round2((ref.buyRef + ref.sellRef) / 2);
-        // Balance gate: only bid what we can actually fund. Not an error — the
-        // natural state until a sale tops the wallet back up.
-        if (desiredPriceRef != null && availableRef < desiredPriceRef) {
+        // Balance gate: only bid what the wallet can still cover after the bids
+        // already kept/created this pass. Not an error — the natural state until
+        // a sale tops the wallet back up.
+        if (desiredPriceRef != null && availableRef - committedRef < desiredPriceRef) {
           logger.warn(
-            { skuKey, desiredPriceRef, availableRef },
+            { skuKey, desiredPriceRef, availableRef, committedRef },
             'insufficient funds for BUY listing — skipping (will retry once balance recovers)',
           );
           skipped++;
@@ -321,6 +325,7 @@ export async function runOnce(): Promise<void> {
 
       const existing = bySkuKey.get(skuKey);
       if (existing) {
+        committedRef = round2(committedRef + desiredPriceRef); // kept listing still claims its bid
         if (hasPriceDrifted(Number(existing.priceRef), desiredPriceRef)) {
           // v2: update price in place (PATCH) rather than delete+recreate.
           const { keys, metal } = refToKeysAndMetal(desiredPriceRef);
@@ -421,6 +426,7 @@ export async function runOnce(): Promise<void> {
 
         totalActive++;
         created++;
+        committedRef = round2(committedRef + desiredPriceRef);
 
         await logEvent({
           type: 'listing.created',

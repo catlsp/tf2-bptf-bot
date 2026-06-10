@@ -14,10 +14,17 @@ import { getSeedWatchlist } from './seed.js';
 // rather than key-priced items it can't fund. Writes config/watch-list.json,
 // refreshes the Redis watch set, and caches names. Never overwrites a good list
 // on failure.
+//
+// ACCUMULATION: pricedb's bulk feed is only the ~100 most-recently-priced items
+// (a rotating window), so a replace-on-refresh watch list stays tiny. Each
+// refresh unions the new affordable items with the PREVIOUS watch set (capped at
+// ACCUM_MAX), so coverage grows over hours as the rotation surfaces new items.
 
 const TOP_N = 300;
-const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+// Total watch-set size cap — bounds the oracle's per-SKU fetch time per refresh.
+const ACCUM_MAX = 300;
 const NAMES_KEY = 'bptf:ob:names';
+const WATCHLIST_KEY = 'bptf:ob:watch';
 
 // Always tracked, even if not in the top 300 — needed for currency conversion.
 const CURRENCY_FALLBACK = ['5021;6', '5002;6', '5001;6', '5000;6'];
@@ -64,6 +71,20 @@ export async function refreshWatchList(): Promise<void> {
     skuSet.add(r.sku);
     if (r.name) names[r.sku] = r.name;
   }
+
+  // Accumulate: carry over previously watched SKUs (newest-first feed entries
+  // take priority; old ones fill the remaining budget). Unsupported SKUs from
+  // before the filter existed are dropped here.
+  try {
+    const previous = await redis.smembers(WATCHLIST_KEY);
+    for (const sku of previous) {
+      if (skuSet.size >= ACCUM_MAX) break;
+      if (!isUnsupportedSku(sku)) skuSet.add(sku);
+    }
+  } catch (e) {
+    logger.debug({ err: errMessage(e) }, '[watchlist] previous set unavailable; not accumulating');
+  }
+
   const skus = [...skuSet];
 
   const doc = { updated_at: new Date().toISOString(), count: skus.length, skus };
@@ -99,7 +120,7 @@ export async function getSkuName(sku: string): Promise<string | null> {
 let timer: NodeJS.Timeout | null = null;
 export function startWatchListScheduler(): void {
   void refreshWatchList();
-  timer = setInterval(() => void refreshWatchList(), REFRESH_INTERVAL_MS);
+  timer = setInterval(() => void refreshWatchList(), env.WATCHLIST_REFRESH_SEC * 1000);
 }
 
 export function stopWatchListScheduler(): void {

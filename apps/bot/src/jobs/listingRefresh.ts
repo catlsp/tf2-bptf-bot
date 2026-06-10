@@ -252,15 +252,30 @@ export async function runOnce(): Promise<void> {
 
       // Per-SKU control (Watchlist panel): pause + position cap apply to every
       // strategy mode. held/cap also feed the listing description ("0/1").
+      // Both gates must also RETIRE an existing live BUY listing — otherwise the
+      // bp.tf classified stays up and a fill would breach the pause/cap.
       const ovr = getOverride(skuKey);
-      if (!isSkuActive(ovr)) {
-        skipped++;
-        continue;
-      }
       const cap = effectiveCap(ovr, env.MAX_POSITION_PER_SKU);
       const held = await openPositionForSku(skuKey);
-      if (held >= cap) {
-        // already holding/listing the max we want of this SKU
+      if (!isSkuActive(ovr) || held >= cap) {
+        const reason = !isSkuActive(ovr) ? 'paused' : 'position_cap_reached';
+        const existing = bySkuKey.get(skuKey);
+        if (existing) {
+          try {
+            if (existing.bptfListingId) await deleteListing(existing.bptfListingId);
+            await prisma.ourListing.update({
+              where: { id: existing.id },
+              data: { status: 'deleted', deletedAt: new Date(), errorMessage: reason },
+            });
+            bySkuKey.delete(skuKey);
+            totalActive--;
+            deleted++;
+            logger.info({ skuKey, held, cap, reason }, 'BUY listing retired');
+          } catch (e) {
+            errors++;
+            logger.warn({ err: errMessage(e), skuKey }, 'failed to retire BUY listing');
+          }
+        }
         skipped++;
         continue;
       }

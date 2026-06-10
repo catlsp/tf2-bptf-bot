@@ -42,6 +42,7 @@ const h = vi.hoisted(() => ({
   getSkuName: vi.fn(),
   getOrderBook: vi.fn(),
   safeLoadMetal: vi.fn(),
+  openPositionForSku: vi.fn(),
 }));
 
 vi.mock('../src/config/index.js', () => ({ env: h.env, loadEnv: () => h.env }));
@@ -69,7 +70,7 @@ vi.mock('../src/watchlist/overrides.js', () => ({
   effectiveRefBuy: (r: number) => r,
   effectiveRefSell: (r: number) => r,
 }));
-vi.mock('../src/risk/limits.js', () => ({ openPositionForSku: vi.fn().mockResolvedValue(0) }));
+vi.mock('../src/risk/limits.js', () => ({ openPositionForSku: h.openPositionForSku }));
 vi.mock('../src/lib/logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -96,6 +97,7 @@ beforeEach(() => {
   h.env.MM_MIN_SPREAD_SCRAP = 1;
   h.env.TF2VAULT_RESERVE_REFINED = 0;
   h.isStopped.mockResolvedValue(false);
+  h.openPositionForSku.mockResolvedValue(0);
   h.refreshKeyPrice.mockResolvedValue(63);
   h.currentKeyRef.mockReturnValue(63);
   h.listMyListings.mockResolvedValue([]);
@@ -244,6 +246,20 @@ describe('listingRefresh — Phase 2 BUY maker', () => {
       (c) => (c[0] as { data?: { status?: string } }).data?.status === 'pending',
     );
     expect(pending).toBeUndefined();
+  });
+
+  it('14. position cap reached → existing BUY listing retired (deleted on bp.tf + row closed)', async () => {
+    h.redis.smembers.mockResolvedValue(['30;6']);
+    h.prisma.ourListing.findMany.mockResolvedValue([activeRow()]);
+    h.listMyListings.mockResolvedValue([{ bptfListingId: '111', intent: 'buy' }]);
+    h.openPositionForSku.mockResolvedValue(3); // held == MAX_POSITION_PER_SKU
+    await runOnce();
+    expect(h.deleteListing).toHaveBeenCalledWith('111');
+    const closed = h.prisma.ourListing.update.mock.calls.find(
+      (c) => (c[0] as { data?: { errorMessage?: string } }).data?.errorMessage === 'position_cap_reached',
+    );
+    expect(closed).toBeDefined();
+    expect(h.createListing).not.toHaveBeenCalled();
   });
 
   it('bonus: deleteAllOurListings deletes every active listing', async () => {

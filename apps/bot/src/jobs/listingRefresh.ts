@@ -443,6 +443,15 @@ export async function runOnce(): Promise<void> {
       }
     }
 
+    // 5b. Orphan sweep: retire active BUY listings whose SKU is no longer in the
+    // watch set (left the pricedb rotation, or the watch-list filter now excludes
+    // it). The loop above never visits them, the oracle no longer prices them, so
+    // their bids would go stale — and unsupported ones we'd even decline to honor.
+    const watchSet = new Set(watchSkus);
+    for (const orphanSku of [...bySkuKey.keys()]) {
+      if (!watchSet.has(orphanSku)) await retireBuy(orphanSku, 'left_watch_set');
+    }
+
     // 6. SELL listings for items we own (InventoryItem HELD → bp.tf SELL).
     // Uses the Listing model (OurListing is BUY-only by convention).
     const sellResult = await refreshSellListings();

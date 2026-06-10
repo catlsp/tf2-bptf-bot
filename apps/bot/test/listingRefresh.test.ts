@@ -275,6 +275,28 @@ describe('listingRefresh — Phase 2 BUY maker', () => {
     expect(h.createListing).not.toHaveBeenCalled();
   });
 
+  it('16. orphan sweep: active listing whose SKU left the watch set → retired', async () => {
+    // watch set no longer contains the killstreak SKU (filtered out), but its
+    // listing is still live — the sweep must take it down.
+    h.redis.smembers.mockResolvedValue(['30;6']);
+    h.prisma.ourListing.findMany.mockResolvedValue([
+      activeRow({ priceRef: 8 }), // 30;6 — watched, kept
+      activeRow({ id: 'a2', skuKey: '312;6;kt-1', bptfListingId: '222' }),
+    ]);
+    h.listMyListings.mockResolvedValue([
+      { bptfListingId: '111', intent: 'buy' },
+      { bptfListingId: '222', intent: 'buy' },
+    ]);
+    h.fetchAutoprice.mockResolvedValue({ buyRef: 10 }); // 30;6 → desired 8 == existing, no churn
+    await runOnce();
+    expect(h.deleteListing).toHaveBeenCalledWith('222');
+    expect(h.deleteListing).not.toHaveBeenCalledWith('111');
+    const closed = h.prisma.ourListing.update.mock.calls.find(
+      (c) => (c[0] as { data?: { errorMessage?: string } }).data?.errorMessage === 'left_watch_set',
+    );
+    expect(closed).toBeDefined();
+  });
+
   it('bonus: deleteAllOurListings deletes every active listing', async () => {
     h.prisma.ourListing.findMany.mockResolvedValue([activeRow({ bptfListingId: '111' }), activeRow({ id: 'a2', bptfListingId: '222' })]);
     await deleteAllOurListings('manual');

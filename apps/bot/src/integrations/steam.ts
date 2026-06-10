@@ -154,6 +154,15 @@ export function startSteam(): Promise<void> {
       logger.error({ err: err.message, eresult: err.eresult }, `steam error, re-login in ${Math.round(delayMs / 1000)}s`);
       setTimeout(() => client.logOn(buildLogOnOptions()), delayMs);
     });
+
+    // If the logOn TOTP code is rejected (e.g. rapid restarts reuse a code within
+    // the same 30s window), steam-user emits 'steamGuard' — and with no handler it
+    // PROMPTS STDIN and hangs forever under pm2. Wait out the window and supply a
+    // fresh code instead.
+    client.on('steamGuard', (_domain: string | null, callback: (code: string) => void) => {
+      logger.warn('steam guard code rejected/expired — waiting 30s for a fresh TOTP window');
+      setTimeout(() => callback(SteamTotp.generateAuthCode(env.STEAM_SHARED_SECRET)), 30_000);
+    });
   });
 }
 
